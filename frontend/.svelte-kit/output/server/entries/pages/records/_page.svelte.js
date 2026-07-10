@@ -1,7 +1,7 @@
 import { N as ensure_array_like, O as attr_style, P as stringify } from "../../../chunks/index.js";
 import { L as Layout } from "../../../chunks/Layout.js";
 import { e as escape_html, l as attr } from "../../../chunks/attributes.js";
-const API_BASE = "http://localhost:8000/api/v1";
+const API_BASE = "https://bill-analyzer-production-22df.up.railway.app/api/v1";
 async function apiFetch(path, options = {}) {
   const url = `${API_BASE}${path}`;
   const headers = { "Content-Type": "application/json" };

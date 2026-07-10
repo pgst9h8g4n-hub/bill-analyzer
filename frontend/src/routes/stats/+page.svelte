@@ -1,27 +1,39 @@
 <script lang="ts">
   import Layout from '$lib/components/Layout.svelte';
   import { getStats, formatAmount, getPlatformLabel, getPlatformColor } from '$lib/api';
-  import { onMount } from 'svelte';
+  import { supabase } from '$lib/supabase';
 
-  let { userId = '' } = $props();
+  let userId = $state('');
+  let userName = $state('');
+
+  async function loadUser() {
+    const { data } = await supabase.auth.getSession();
+    if (data.session) {
+      userId = data.session.user.id;
+      userName = data.session.user.user_metadata?.name || data.session.user.email?.split('@')[0] || '用户';
+    }
+  }
+  loadUser();
 
   let stats = $state<any>(null);
   let loading = $state(true);
   let error = $state('');
 
-  onMount(async () => {
+  async function loadStats() {
     if (!userId) { loading = false; return; }
     try { stats = await getStats(userId); }
     catch (e: any) { error = e.message; }
     finally { loading = false; }
-  });
+  }
+
+  $effect(() => { if (userId) loadStats(); });
 
   function formatMonth(dateStr: string): string {
     return new Date(dateStr).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit' });
   }
 </script>
 
-<Layout currentPage="stats" userId={userId}>
+<Layout currentPage="stats" userName={userName} userId={userId}>
   <div class="page">
     <div class="page-header">
       <h2>统计报表</h2>

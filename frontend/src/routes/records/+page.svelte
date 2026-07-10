@@ -1,10 +1,20 @@
 <script lang="ts">
   import Layout from '$lib/components/Layout.svelte';
   import { getRecords, formatAmount, formatShortDate, getPlatformLabel, getPlatformColor } from '$lib/api';
+  import { supabase } from '$lib/supabase';
   import type { BillRecord } from '$lib/api';
-  import { onMount } from 'svelte';
 
-  let { userId = '' } = $props();
+  let userId = $state('');
+  let userName = $state('');
+
+  async function loadUser() {
+    const { data } = await supabase.auth.getSession();
+    if (data.session) {
+      userId = data.session.user.id;
+      userName = data.session.user.user_metadata?.name || data.session.user.email?.split('@')[0] || '用户';
+    }
+  }
+  loadUser();
 
   let records = $state<BillRecord[]>([]);
   let total = $state(0);
@@ -19,6 +29,7 @@
   let filterEndDate = $state('');
 
   async function loadRecords() {
+    if (!userId) { loading = false; return; }
     loading = true;
     try {
       const params: any = { user_id: userId, page, page_size: pageSize };
@@ -37,7 +48,8 @@
     }
   }
 
-  onMount(loadRecords);
+  // 用户加载后自动加载记录
+  $effect(() => { if (userId) loadRecords(); });
 
   function goTo(p: number) {
     page = p;
@@ -45,7 +57,7 @@
   }
 </script>
 
-<Layout currentPage="records" userId={userId}>
+<Layout currentPage="records" userName={userName} userId={userId}>
   <div class="page">
     <div class="page-header">
       <h2>账单记录</h2>

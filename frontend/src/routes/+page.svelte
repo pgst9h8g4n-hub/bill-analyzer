@@ -1,8 +1,19 @@
 <script lang="ts">
   import Layout from '$lib/components/Layout.svelte';
   import { getStats, formatAmount, getPlatformLabel, getPlatformColor } from '$lib/api';
+  import { supabase } from '$lib/supabase';
 
-  let { userId = '', userName = '' } = $props();
+  let userId = $state('');
+  let userName = $state('');
+
+  async function loadUser() {
+    const { data } = await supabase.auth.getSession();
+    if (data.session) {
+      userId = data.session.user.id;
+      userName = data.session.user.user_metadata?.name || data.session.user.email?.split('@')[0] || '用户';
+    }
+  }
+  loadUser();
 
   let stats = $state<any>(null);
   let loading = $state(true);
@@ -39,8 +50,8 @@
     }
   }
 
-  // 初始加载
-  $effect(() => { loadData(); });
+  // 用户加载后自动加载数据
+  $effect(() => { if (userId) loadData(); });
 </script>
 
 <Layout currentPage="dashboard" userName={userName} userId={userId}>

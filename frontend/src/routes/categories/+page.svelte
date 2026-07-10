@@ -1,9 +1,19 @@
 <script lang="ts">
   import Layout from '$lib/components/Layout.svelte';
   import { getCategories, createCategory, deleteCategory, type CategoryNode } from '$lib/api';
-  import { onMount } from 'svelte';
+  import { supabase } from '$lib/supabase';
 
-  let { userId = '' } = $props();
+  let userId = $state('');
+  let userName = $state('');
+
+  async function loadUser() {
+    const { data } = await supabase.auth.getSession();
+    if (data.session) {
+      userId = data.session.user.id;
+      userName = data.session.user.user_metadata?.name || data.session.user.email?.split('@')[0] || '用户';
+    }
+  }
+  loadUser();
 
   let categories = $state<CategoryNode[]>([]);
   let loading = $state(true);
@@ -21,8 +31,11 @@
     finally { loading = false; }
   }
 
+  // 用户加载后自动加载分类
+  $effect(() => { if (userId) loadCategories(); });
+
   async function handleCreate() {
-    if (!newName.trim()) return;
+    if (!newName.trim() || !userId) return;
     saving = true;
     try {
       const keywords = newKeywords.split(/[,，\s]+/).filter(Boolean);
@@ -39,8 +52,6 @@
     catch (e: any) { error = e.message; }
   }
 
-  onMount(loadCategories);
-
   function flattenCats(cats: CategoryNode[], depth = 0): { cat: CategoryNode; depth: number }[] {
     let result: { cat: CategoryNode; depth: number }[] = [];
     for (const c of cats) {
@@ -53,7 +64,7 @@
   const flatList = $derived(flattenCats(categories));
 </script>
 
-<Layout currentPage="categories" userId={userId}>
+<Layout currentPage="categories" userName={userName} userId={userId}>
   <div class="page">
     <div class="page-header">
       <h2>分类管理</h2>

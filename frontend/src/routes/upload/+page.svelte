@@ -1,14 +1,25 @@
 <script lang="ts">
   import Layout from '$lib/components/Layout.svelte';
   import { uploadFile } from '$lib/api';
-
-  let { userId = '' } = $props();
+  import { supabase } from '$lib/supabase';
 
   let selectedFile = $state<File | null>(null);
   let platformHint = $state('');
   let uploading = $state(false);
   let result = $state<any>(null);
   let error = $state('');
+  let userId = $state('');
+  let userName = $state('');
+
+  // 获取当前用户
+  async function loadUser() {
+    const { data } = await supabase.auth.getSession();
+    if (data.session) {
+      userId = data.session.user.id;
+      userName = data.session.user.user_metadata?.name || data.session.user.email?.split('@')[0] || '用户';
+    }
+  }
+  loadUser();
 
   const fileTypes = {
     alipay: { accept: '.csv', label: '支付宝交易明细 CSV', color: '#1677FF' },
@@ -17,7 +28,7 @@
   };
 
   async function handleUpload() {
-    if (!selectedFile || !userId) { error = '请选择文件并确认用户'; return; }
+    if (!selectedFile || !userId) { error = '请先登录'; return; }
     uploading = true;
     error = '';
     result = null;
@@ -46,7 +57,7 @@
   }
 </script>
 
-<Layout currentPage="upload" userId={userId}>
+<Layout currentPage="upload" userName={userName} userId={userId}>
   <div class="page">
     <div class="page-header">
       <h2>上传账单</h2>
@@ -94,7 +105,7 @@
       </div>
     </div>
 
-    <button class="upload-btn" disabled={!selectedFile || uploading} onclick={handleUpload}>
+    <button class="upload-btn" disabled={!selectedFile || uploading || !userId} onclick={handleUpload}>
       {uploading ? '解析中...' : '开始解析'}
     </button>
 

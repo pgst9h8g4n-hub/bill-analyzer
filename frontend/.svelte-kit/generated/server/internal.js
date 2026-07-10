@@ -26,7 +26,7 @@ export const options = {
 		app: ({ head, body, assets, nonce, env }) => "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n  <meta charset=\"UTF-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n  <link rel=\"stylesheet\" href=\"/styles/global.css\" />\n  " + head + "\n</head>\n<body data-sveltekit-preload-data=\"hover\">\n  <div id=\"svelte\">" + body + "</div>\n</body>\n</html>\n",
 		error
 	},
-	version_hash: "1tbsz4r"
+	version_hash: "c8srof"
 };
 
 export async function get_hooks() {
