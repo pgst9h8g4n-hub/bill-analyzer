@@ -1,0 +1,4 @@
+"""Railway 部署入口"""
+from app.main import app
+
+# Railway 会自动寻找这个 module 中的 app 对象
