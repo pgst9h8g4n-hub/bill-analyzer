@@ -3,7 +3,7 @@
  * 封装所有与 FastAPI 后端的 HTTP 调用
  */
 
-const API_BASE = 'https://bill-analyzer-production-22df.up.railway.app/api/v1';
+const API_BASE = `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}`;
 
 let getToken: (() => string | null) | null = null;
 
