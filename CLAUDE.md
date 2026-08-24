@@ -24,9 +24,11 @@ Issues 和 PRD 使用 GitHub Issues 管理，通过 `gh` CLI 操作。See `docs/
 - 不清楚需求时**主动确认**，不猜测执行
 
 ### 目录结构
-- `Docs/` — 存放需求文档、技术设计、执行计划
+- `docs/` — 存放需求文档、技术设计、执行计划、技能配置
+  - `docs/agents/` — 技能配置文件（issue-tracker.md, domain.md, triage-labels.md）
+  - `docs/adr/` — 架构决策记录
+- `Docs/` — 存放项目文档（需求说明.md, 技术规范.md, 执行计划.md）
 - `开发日志/` — 按日期记录开发日志（格式：`开发日志/YYYY-MM-DD.md`）
-- `docs/adr/` — 架构决策记录
 - `src/` — 源代码
 
 ### 开发流程
