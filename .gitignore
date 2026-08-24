@@ -25,3 +25,5 @@ dist-ssr
 
 # SvelteKit
 .svelte-kit
+
+.svelte-kit/
