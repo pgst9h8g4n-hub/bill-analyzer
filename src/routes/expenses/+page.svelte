@@ -4,10 +4,11 @@
   import { getCategories } from '$lib/db';
   import { centsToYuan } from '$lib/utils/format';
   import type { Expense, Category } from '$lib/db';
+  import { currentUserId } from '$lib/session';
 
+  $: userId = $currentUserId;
   let expenses: Expense[] = [];
   let categories: Category[] = [];
-  let currentUserId = 0;
 
   // Filters
   let filterStartDate = '';
@@ -36,19 +37,16 @@
   let formError = '';
 
   onMount(async () => {
-    const stored = localStorage.getItem('xiaoliuji_session');
-    if (stored) {
-      try {
-        currentUserId = JSON.parse(stored).userId;
-      } catch {}
-    }
     categories = await getCategories();
     if (categories.length > 0) formCategoryId = categories[0].id;
     await loadExpenses();
   });
 
+  $: if (userId > 0) loadExpenses();
+
   async function loadExpenses() {
-    expenses = await getExpenses(currentUserId, {
+    if (!userId) return;
+    expenses = await getExpenses(userId, {
       startDate: filterStartDate || undefined,
       endDate: filterEndDate || undefined,
       categoryId: filterCategoryId || undefined
@@ -90,7 +88,6 @@
 
     try {
       if (editingId) {
-        const { updateExpense } = await import('$lib/db/expenses');
         await updateExpense(editingId, {
           amount: formAmount,
           date: formDate,
@@ -100,8 +97,7 @@
           isRefund: formIsRefund
         });
       } else {
-        const { createExpense } = await import('$lib/db/expenses');
-        await createExpense(currentUserId, {
+        await createExpense(userId, {
           amount: formAmount,
           date: formDate,
           categoryId: formCategoryId,
@@ -139,19 +135,20 @@
     return categories.find(c => c.id === id) ?? { icon: '📝', color: '#6b7280', name: '其他' };
   }
 
+  async function createExpense(uId: number, data: { amount: string; date: string; categoryId: number; merchant?: string; remark?: string; isRefund: boolean }) {
+    const { createExpense: ce } = await import('$lib/db/expenses');
+    await ce(uId, data);
+  }
+
+  async function updateExpense(id: number, data: { amount?: string; date?: string; categoryId?: number; merchant?: string; remark?: string; isRefund?: boolean }) {
+    const { updateExpense: ue } = await import('$lib/db/expenses');
+    await ue(id, data);
+  }
+
   $: filteredTotal = expenses.reduce((s, e) => s + (e.is_refund ? -e.amount_cents : e.amount_cents), 0);
 </script>
 
 <div class="min-h-screen bg-gray-50">
-  <nav class="bg-indigo-600 text-white px-4 py-3 flex items-center justify-between"
-       style="padding-top: max(12px, env(safe-area-inset-top));">
-    <h1 class="text-lg font-bold">消费明细</h1>
-    <button onclick={openAdd}
-      class="bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg text-sm font-medium transition">
-      + 记账
-    </button>
-  </nav>
-
   <main class="px-4 py-4 max-w-md mx-auto space-y-3">
     <!-- 筛选栏 -->
     <div class="bg-white rounded-2xl shadow-sm p-4">

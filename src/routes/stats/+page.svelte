@@ -11,26 +11,24 @@
     type DailyStat
   } from '$lib/db/stats';
   import { centsToYuan } from '$lib/utils/format';
+  import { currentUserId } from '$lib/session';
 
+  $: userId = $currentUserId;
   let summary: StatSummary = { monthTotal: 0, weekTotal: 0, yesterdayTotal: 0 };
   let categoryStats: CategoryStat[] = [];
   let dailyTrend: DailyStat[] = [];
-  let currentUserId = 0;
   let loading = true;
 
   let pieChart: echarts.ECharts | null = null;
   let lineChart: echarts.ECharts | null = null;
 
   onMount(async () => {
-    const stored = localStorage.getItem('xiaoliuji_session');
-    if (stored) {
-      try { currentUserId = JSON.parse(stored).userId; } catch {}
-    }
+    if (!userId) return;
 
     const [sum, cats, trend] = await Promise.all([
-      getSummary(currentUserId),
-      getCategoryStats(currentUserId, new Date().toISOString().slice(0, 7)),
-      getDailyTrend(currentUserId, 7)
+      getSummary(userId),
+      getCategoryStats(userId, new Date().toISOString().slice(0, 7)),
+      getDailyTrend(userId, 7)
     ]);
 
     summary = sum;
@@ -61,9 +59,10 @@
           emphasis: { itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0,0,0,0.5)' } }
         }]
       });
-      pieChart.on('click', (params: any) => {
-        if (params.data?.name) {
-          goto(`/expenses?category=${encodeURIComponent(params.data.name)}`);
+      pieChart.on('click', (params) => {
+        const name = (params.data as { name?: string })?.name;
+        if (name) {
+          goto(`/expenses?category=${encodeURIComponent(name)}`);
         }
       });
     }
@@ -74,8 +73,9 @@
       lineChart.setOption({
         tooltip: {
           trigger: 'axis',
-          formatter: (params: any) => {
-            const val = params?.[0]?.value ?? 0;
+          formatter: (params: unknown) => {
+            const arr = params as { value?: number }[];
+            const val = arr?.[0]?.value ?? 0;
             return `¥${centsToYuan(val)}`;
           }
         },
@@ -89,7 +89,7 @@
         },
         yAxis: {
           type: 'value',
-          splitLine: { lineStyle: { color: '#f3f4f6' } },
+          splitLine: { lineStyle: { color: '#f3f46' } },
           axisLabel: {
             color: '#9ca3af',
             fontSize: 10,
@@ -115,7 +115,7 @@
           }
         }]
       });
-      lineChart.on('click', (params: any) => {
+      lineChart.on('click', (params: { dataIndex?: number }) => {
         if (params.dataIndex !== undefined) {
           const date = dailyTrend[params.dataIndex]?.date;
           if (date) goto(`/expenses?startDate=${date}&endDate=${date}`);
@@ -131,11 +131,6 @@
 </script>
 
 <div class="min-h-screen bg-gray-50">
-  <nav class="bg-indigo-600 text-white px-4 py-3 flex items-center justify-between"
-       style="padding-top: max(12px, env(safe-area-inset-top));">
-    <h1 class="text-lg font-bold">统计概览</h1>
-  </nav>
-
   <main class="px-4 py-4 max-w-md mx-auto space-y-4">
     {#if loading}
       <div class="text-center py-12 text-gray-400">

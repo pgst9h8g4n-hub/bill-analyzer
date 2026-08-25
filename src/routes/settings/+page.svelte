@@ -1,28 +1,20 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { changePassword, deleteUser, clearSession } from '$lib/stores/auth';
+  import { currentUserId, currentUsername } from '$lib/session';
 
-  let username = '';
+  $: userId = $currentUserId;
+  $: username = $currentUsername;
+
   let oldPassword = '';
   let newPassword = '';
   let confirmNewPassword = '';
   let passwordMsg = '';
   let deleting = false;
 
-  onMount(() => {
-    const stored = localStorage.getItem('xiaoliuji_session');
-    if (stored) {
-      try {
-        username = JSON.parse(stored).username;
-      } catch {}
-    }
-  });
-
-  async function handleChangePassword(event: SubmitEvent) {
-    event.preventDefault();
+  async function handleChangePassword() {
     passwordMsg = '';
-    const form = event.target as HTMLFormElement;
-    const formData = new FormData(form);
-
     if (!oldPassword || !newPassword || !confirmNewPassword) {
       passwordMsg = '请填写所有字段';
       return;
@@ -35,25 +27,39 @@
       passwordMsg = '新密码至少4位';
       return;
     }
-    // TODO: 调用服务端 API 修改密码
-    passwordMsg = '密码修改功能开发中';
+    if (!userId) {
+      passwordMsg = '请先登录';
+      return;
+    }
+    const result = await changePassword(userId, oldPassword, newPassword);
+    if (result.success) {
+      passwordMsg = '密码修改成功';
+      oldPassword = '';
+      newPassword = '';
+      confirmNewPassword = '';
+    } else {
+      passwordMsg = result.error ?? '修改失败';
+    }
   }
 
   async function handleDeleteAccount() {
-    if (!confirm('确定要删除账户吗？此操作不可恢复！')) return;
+    if (!confirm('确定要删除账户吗？此操作不可恢复，所有消费记录将被清空！')) return;
+    if (!userId) return;
     deleting = true;
-    // TODO: 调用服务端 API 删除账户
-    deleting = false;
+    try {
+      await deleteUser(userId);
+      clearSession();
+      sessionStorage.removeItem('xiaoliuji_session');
+      goto('/login');
+    } catch {
+      passwordMsg = '删除失败，请重试';
+    } finally {
+      deleting = false;
+    }
   }
 </script>
 
 <div class="min-h-screen bg-gray-50">
-  <nav class="bg-indigo-600 text-white px-4 py-3 flex items-center justify-between"
-       style="padding-top: max(12px, env(safe-area-inset-top));">
-    <h1 class="text-lg font-bold">设置</h1>
-    <a href="/login" class="text-sm opacity-80 hover:opacity-100">退出登录</a>
-  </nav>
-
   <main class="px-4 py-4 max-w-md mx-auto space-y-4">
     <!-- 账户信息 -->
     <div class="bg-white rounded-2xl shadow-sm p-4">
@@ -72,7 +78,7 @@
     <!-- 修改密码 -->
     <div class="bg-white rounded-2xl shadow-sm p-4">
       <h2 class="font-semibold text-gray-800 mb-3">修改密码</h2>
-      <form onsubmit={handleChangePassword} class="space-y-3">
+      <form onsubmit={(e) => { e.preventDefault(); handleChangePassword(); }} class="space-y-3">
         <input type="password" name="oldPassword" bind:value={oldPassword} placeholder="当前密码"
           class="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none" />
         <input type="password" name="newPassword" bind:value={newPassword} placeholder="新密码"

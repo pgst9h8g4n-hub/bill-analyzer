@@ -47,6 +47,8 @@ export async function login(username: string, password: string): Promise<{ succe
     return { success: true, user };
   } catch (e) {
     return { success: false, error: '登录失败，请重试' };
+  } finally {
+    syncSessionStorage();
   }
 }
 
@@ -86,11 +88,13 @@ export async function setSession(user: User): Promise<void> {
     username: user.username,
     createdAt: user.created_at
   }) });
+  syncSessionStorage();
 }
 
 export async function clearSession(): Promise<void> {
   sessionStore.set(null);
   await db.settings.delete('session');
+  syncSessionStorage();
 }
 
 export async function restoreSession(): Promise<Session | null> {
@@ -112,3 +116,15 @@ export const session = {
   subscribe: sessionStore.subscribe,
   set: sessionStore.set
 };
+
+// Sync localStorage with IndexedDB session on login/logout
+export function syncSessionStorage(): void {
+  let current: Session | null = null;
+  const unsub = sessionStore.subscribe(val => { current = val; });
+  unsub();
+  if (current) {
+    localStorage.setItem('xiaoliuji_session', JSON.stringify(current));
+  } else {
+    localStorage.removeItem('xiaoliuji_session');
+  }
+}

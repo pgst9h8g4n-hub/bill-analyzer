@@ -4,28 +4,46 @@
   import { getCategories } from '$lib/db';
   import { exportCSV, exportJSON, getExpensesForExport } from '$lib/export';
   import { centsToYuan } from '$lib/utils/format';
-  import type { Expense } from '$lib/db';
+  import type { Expense, Category } from '$lib/db';
+  import { currentUserId } from '$lib/session';
 
+  $: userId = $currentUserId;
   let expenses: Expense[] = [];
-  let currentUserId = 0;
+  let categories: Category[] = [];
   let loading = true;
+  let filterStartDate = '';
+  let filterEndDate = '';
+  let filterCategoryId = 0;
 
   onMount(async () => {
-    const stored = localStorage.getItem('xiaoliuji_session');
-    if (stored) {
-      try { currentUserId = JSON.parse(stored).userId; } catch {}
-    }
-    expenses = await getExpensesForExport(currentUserId);
+    if (!userId) return;
+    [expenses, categories] = await Promise.all([
+      getExpensesForExport(userId),
+      getCategories()
+    ]);
     loading = false;
   });
 
+  function getFilteredExpenses(): Expense[] {
+    return expenses.filter(e => {
+      if (filterCategoryId && e.category_id !== filterCategoryId) return false;
+      if (filterStartDate && e.paid_at < filterStartDate) return false;
+      if (filterEndDate && e.paid_at > filterEndDate + 'T23:59:59') return false;
+      return true;
+    });
+  }
+
   async function downloadCSV() {
-    const csv = await exportCSV(currentUserId, expenses);
+    const filtered = getFilteredExpenses();
+    if (filtered.length === 0) return;
+    const csv = await exportCSV(userId, filtered);
     downloadFile(csv, '小六记_消费记录.csv', 'text/csv;charset=utf-8');
   }
 
   async function downloadJSON() {
-    const json = await exportJSON(currentUserId, expenses);
+    const filtered = getFilteredExpenses();
+    if (filtered.length === 0) return;
+    const json = await exportJSON(userId, filtered);
     downloadFile(json, '小六记_消费记录.json', 'application/json');
   }
 
@@ -41,11 +59,6 @@
 </script>
 
 <div class="min-h-screen bg-gray-50">
-  <nav class="bg-indigo-600 text-white px-4 py-3 flex items-center justify-between"
-       style="padding-top: max(12px, env(safe-area-inset-top));">
-    <h1 class="text-lg font-bold">数据导出</h1>
-  </nav>
-
   <main class="px-4 py-4 max-w-md mx-auto space-y-4">
     {#if loading}
       <div class="text-center py-12 text-gray-400">
@@ -53,12 +66,30 @@
         <p class="text-sm">加载中...</p>
       </div>
     {:else}
+      <!-- 筛选 -->
+      <div class="bg-white rounded-2xl shadow-sm p-4 space-y-3">
+        <h2 class="font-semibold text-gray-800">筛选条件</h2>
+        <div class="flex gap-2">
+          <input type="date" bind:value={filterStartDate}
+            class="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-500" />
+          <input type="date" bind:value={filterEndDate}
+            class="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-500" />
+        </div>
+        <select bind:value={filterCategoryId}
+          class="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-500">
+          <option value="0">全部分类</option>
+          {#each categories as cat}
+            <option value={cat.id}>{cat.icon} {cat.name}</option>
+          {/each}
+        </select>
+      </div>
+
       <div class="bg-white rounded-2xl shadow-sm p-4">
         <h2 class="font-semibold text-gray-800 mb-2">导出数据</h2>
-        <p class="text-sm text-gray-500 mb-4">共 {expenses.length} 条消费记录</p>
+        <p class="text-sm text-gray-500 mb-4">共 {expenses.length} 条记录，{getFilteredExpenses().length} 条匹配</p>
         <div class="space-y-3">
           <button onclick={downloadCSV}
-            class="w-full flex items-center gap-3 px-4 py-4 bg-green-50 hover:bg-green-100 rounded-xl transition">
+            class="w-full flex items-center gap-3 px-4 py-4 bg-green-50 hover:bg-green-100 rounded-xl transition disabled:opacity-50">
             <span class="text-2xl">📄</span>
             <div class="text-left">
               <div class="font-medium text-gray-800">导出 CSV</div>
@@ -66,7 +97,7 @@
             </div>
           </button>
           <button onclick={downloadJSON}
-            class="w-full flex items-center gap-3 px-4 py-4 bg-blue-50 hover:bg-blue-100 rounded-xl transition">
+            class="w-full flex items-center gap-3 px-4 py-4 bg-blue-50 hover:bg-blue-100 rounded-xl transition disabled:opacity-50">
             <span class="text-2xl">🔧</span>
             <div class="text-left">
               <div class="font-medium text-gray-800">导出 JSON</div>

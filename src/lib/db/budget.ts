@@ -1,17 +1,25 @@
 import { db } from '$lib/db';
-import type { Budget, Category } from '$lib/db';
+import type { Budget } from '$lib/db';
 
 export async function getBudgets(userId: number, month: string): Promise<Budget[]> {
-  return db.budgets.where('user_id').equals(userId).and((b) => b.month === month).toArray();
+  try {
+    return db.budgets.where('user_id').equals(userId).and((b) => b.month === month).toArray();
+  } catch {
+    return [];
+  }
 }
 
 export async function getCurrentMonthSpending(userId: number, month: string): Promise<number> {
-  const prefix = month + '-';
-  const expenses = await db.expenses
-    .where('user_id').equals(userId)
-    .and((e) => e.paid_at.startsWith(prefix))
-    .toArray();
-  return expenses.reduce((s, e) => s + (e.is_refund ? -e.amount_cents : e.amount_cents), 0);
+  try {
+    const prefix = month + '-';
+    const expenses = await db.expenses
+      .where('user_id').equals(userId)
+      .and((e) => e.paid_at.startsWith(prefix))
+      .toArray();
+    return expenses.reduce((s, e) => s + (e.is_refund ? -e.amount_cents : e.amount_cents), 0);
+  } catch {
+    return 0;
+  }
 }
 
 export async function saveBudget(userId: number, data: { month: string; limitCents: number; categoryId: number | null }): Promise<void> {
@@ -30,8 +38,4 @@ export async function saveBudget(userId: number, data: { month: string; limitCen
       category_id: data.categoryId
     });
   }
-}
-
-export async function getCategories(): Promise<Category[]> {
-  return db.categories.toArray();
 }

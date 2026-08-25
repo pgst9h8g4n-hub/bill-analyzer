@@ -3,13 +3,14 @@
   import {
     getBudgets,
     getCurrentMonthSpending,
-    saveBudget,
-    getCategories
+    saveBudget
   } from '$lib/db/budget';
+  import { getCategories } from '$lib/db';
   import { centsToYuan, getCurrentMonth } from '$lib/utils/format';
   import type { Budget, Category } from '$lib/db';
+  import { currentUserId } from '$lib/session';
 
-  let currentUserId = 0;
+  $: userId = $currentUserId;
   let currentMonth = getCurrentMonth();
   let budgets: Budget[] = [];
   let categories: Category[] = [];
@@ -20,14 +21,11 @@
   let addCategoryId = 0;
 
   onMount(async () => {
-    const stored = localStorage.getItem('xiaoliuji_session');
-    if (stored) {
-      try { currentUserId = JSON.parse(stored).userId; } catch {}
-    }
+    if (!userId) return;
     [budgets, categories, spending] = await Promise.all([
-      getBudgets(currentUserId, currentMonth),
+      getBudgets(userId, currentMonth),
       getCategories(),
-      getCurrentMonthSpending(currentUserId, currentMonth)
+      getCurrentMonthSpending(userId, currentMonth)
     ]);
     if (categories.length > 0) addCategoryId = categories[0].id;
   });
@@ -40,12 +38,13 @@
 
   async function handleSave() {
     if (!addLimit || isNaN(parseFloat(addLimit)) || parseFloat(addLimit) <= 0) return;
-    await saveBudget(currentUserId, {
+    await saveBudget(userId, {
       month: currentMonth,
       limitCents: Math.round(parseFloat(addLimit) * 100),
       categoryId: addCategoryId || null
     });
-    budgets = await getBudgets(currentUserId, currentMonth);
+    budgets = await getBudgets(userId, currentMonth);
+    spending = await getCurrentMonthSpending(userId, currentMonth);
     showAddForm = false;
   }
 
@@ -66,15 +65,6 @@
 </script>
 
 <div class="min-h-screen bg-gray-50">
-  <nav class="bg-indigo-600 text-white px-4 py-3 flex items-center justify-between"
-       style="padding-top: max(12px, env(safe-area-inset-top));">
-    <h1 class="text-lg font-bold">预算管理</h1>
-    <button onclick={openAdd}
-      class="bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg text-sm font-medium transition">
-      + 设置预算
-    </button>
-  </nav>
-
   <main class="px-4 py-4 max-w-md mx-auto space-y-4">
     <div class="bg-white rounded-2xl shadow-sm p-5">
       <div class="flex items-center justify-between mb-3">
@@ -125,8 +115,8 @@
                     <span class="text-gray-500">¥{centsToYuan(budget.limit_cents)}</span>
                   </div>
                   <div class="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div class="h-full rounded-full"
-                      style="width: 100%; background-color: {categories.find(c => c.id === budget.category_id)?.color ?? '#6b7280'}"></div>
+                    <div class="h-full rounded-full transition-all"
+                      style="width: {Math.min(Math.round(spending / (budget.limit_cents || 1) * 100), 100)}%; background-color: {getProgressColor(spending, budget.limit_cents)}"></div>
                   </div>
                 </div>
               {:else}

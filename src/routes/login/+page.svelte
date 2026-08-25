@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { register, login, clearSession } from '$lib/stores/auth';
+  import { register, login, setSession } from '$lib/stores/auth';
   import type { Session } from '$lib/stores/auth';
   import { onMount } from 'svelte';
 
@@ -14,7 +14,7 @@
   let currentSession: Session | null = null;
 
   onMount(async () => {
-    const stored = localStorage.getItem('xiaoliuji_session');
+    const stored = sessionStorage.getItem('xiaoliuji_session');
     if (stored) {
       try {
         currentSession = JSON.parse(stored) as Session;
@@ -56,11 +56,7 @@
         if (!result.success) {
           error = result.error ?? '登录失败';
         } else if (result.user) {
-          localStorage.setItem('xiaoliuji_session', JSON.stringify({
-            userId: result.user.id,
-            username: result.user.username,
-            createdAt: result.user.created_at
-          }));
+          await setSession(result.user);
           goto('/');
         }
       }

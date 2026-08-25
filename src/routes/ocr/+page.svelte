@@ -4,7 +4,8 @@
   import { createExpense } from '$lib/db/expenses';
   import { getCategories } from '$lib/db';
   import { centsToYuan } from '$lib/utils/format';
-  import type { Expense, Category } from '$lib/db';
+  import type { Category } from '$lib/db';
+  import { currentUserId } from '$lib/session';
 
   // Parse OCR params from URL
   const urlParams = new URLSearchParams(window.location.search);
@@ -13,7 +14,6 @@
   let ocrMerchant = urlParams.get('merchant') ?? '';
 
   let categories: Category[] = [];
-  let currentUserId = 0;
   let selectedCategory = 0;
   let remark = '';
   let isRefund = false;
@@ -21,14 +21,10 @@
   let success = false;
   let errorMsg = '';
 
+  $: userId = $currentUserId;
+
   onMount(async () => {
-    const stored = localStorage.getItem('xiaoliuji_session');
-    if (stored) {
-      try {
-        currentUserId = JSON.parse(stored).userId;
-      } catch {}
-    }
-    if (!currentUserId) {
+    if (!userId) {
       goto('/login');
       return;
     }
@@ -44,7 +40,7 @@
     loading = true;
     errorMsg = '';
     try {
-      await createExpense(currentUserId, {
+      await createExpense(userId, {
         amount: ocrAmount,
         date: ocrTime || new Date().toISOString(),
         categoryId: selectedCategory,
@@ -53,7 +49,6 @@
         isRefund
       });
       success = true;
-      // Clear URL params
       window.history.replaceState(null, '', window.location.pathname);
     } catch {
       errorMsg = '保存失败，请重试';
@@ -68,12 +63,6 @@
 </script>
 
 <div class="min-h-screen bg-gray-50">
-  <nav class="bg-indigo-600 text-white px-4 py-3 flex items-center justify-between"
-       style="padding-top: max(12px, env(safe-area-inset-top));">
-    <h1 class="text-lg font-bold">确认记账</h1>
-    <button onclick={goBack} class="text-sm opacity-80 hover:opacity-100">返回</button>
-  </nav>
-
   <main class="px-4 py-4 max-w-md mx-auto space-y-4">
     {#if success}
       <div class="bg-green-50 border border-green-200 rounded-2xl p-6 text-center">
