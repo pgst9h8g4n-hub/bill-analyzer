@@ -14,6 +14,16 @@
   let filterEndDate = '';
   let filterCategoryId = 0;
 
+  // Read URL params for drill-down
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('category')) {
+    const catName = decodeURIComponent(params.get('category')!);
+    const found = categories.find(c => c.name === catName);
+    if (found) filterCategoryId = found.id;
+  }
+  if (params.get('startDate')) filterStartDate = params.get('startDate')!;
+  if (params.get('endDate')) filterEndDate = params.get('endDate')!;
+
   // Add/Edit modal
   let showForm = false;
   let editingId: number | null = null;

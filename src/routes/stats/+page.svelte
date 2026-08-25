@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import * as echarts from 'echarts';
   import {
     getSummary,
@@ -60,6 +61,11 @@
           emphasis: { itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0,0,0,0.5)' } }
         }]
       });
+      pieChart.on('click', (params: any) => {
+        if (params.data?.name) {
+          goto(`/expenses?category=${encodeURIComponent(params.data.name)}`);
+        }
+      });
     }
 
     const lineDom = document.getElementById('line-chart');
@@ -108,6 +114,12 @@
             }
           }
         }]
+      });
+      lineChart.on('click', (params: any) => {
+        if (params.dataIndex !== undefined) {
+          const date = dailyTrend[params.dataIndex]?.date;
+          if (date) goto(`/expenses?startDate=${date}&endDate=${date}`);
+        }
       });
     }
 
