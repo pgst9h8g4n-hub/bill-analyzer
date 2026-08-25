@@ -1,18 +1,9 @@
 <script lang="ts">
-  import { onMount, createEventDispatcher } from 'svelte';
-  import { goto } from '$app/navigation';
-  import {
-    getExpenses,
-    createExpense,
-    updateExpense,
-    deleteExpense,
-    getCategories,
-    type ExpenseFormData
-  } from './+page.server';
-  import type { Expense, Category } from '$lib/db';
+  import { onMount } from 'svelte';
+  import { getExpenses, deleteExpense } from '$lib/db/expenses';
+  import { getCategories } from '$lib/db';
   import { centsToYuan } from '$lib/utils/format';
-
-  const dispatch = createEventDispatcher();
+  import type { Expense, Category } from '$lib/db';
 
   let expenses: Expense[] = [];
   let categories: Category[] = [];
@@ -33,9 +24,6 @@
   let formRemark = '';
   let formIsRefund = false;
   let formError = '';
-
-  // Delete confirm
-  let deletingId: number | null = null;
 
   onMount(async () => {
     const stored = localStorage.getItem('xiaoliuji_session');
@@ -87,29 +75,30 @@
       formError = '请输入有效金额';
       return;
     }
-    if (!formDate) {
-      formError = '请选择日期时间';
-      return;
-    }
-    if (!formCategoryId) {
-      formError = '请选择分类';
-      return;
-    }
-
-    const data: ExpenseFormData = {
-      amount: formAmount,
-      date: formDate,
-      categoryId: formCategoryId,
-      merchant: formMerchant || undefined,
-      remark: formRemark || undefined,
-      isRefund: formIsRefund
-    };
+    if (!formDate) { formError = '请选择日期时间'; return; }
+    if (!formCategoryId) { formError = '请选择分类'; return; }
 
     try {
       if (editingId) {
-        await updateExpense(editingId, data);
+        const { updateExpense } = await import('$lib/db/expenses');
+        await updateExpense(editingId, {
+          amount: formAmount,
+          date: formDate,
+          categoryId: formCategoryId,
+          merchant: formMerchant || undefined,
+          remark: formRemark || undefined,
+          isRefund: formIsRefund
+        });
       } else {
-        await createExpense(currentUserId, data);
+        const { createExpense } = await import('$lib/db/expenses');
+        await createExpense(currentUserId, {
+          amount: formAmount,
+          date: formDate,
+          categoryId: formCategoryId,
+          merchant: formMerchant || undefined,
+          remark: formRemark || undefined,
+          isRefund: formIsRefund
+        });
       }
       showForm = false;
       editingId = null;
@@ -120,13 +109,9 @@
   }
 
   async function handleDelete(id: number) {
-    deletingId = id;
-    try {
-      await deleteExpense(id);
-      await loadExpenses();
-    } finally {
-      deletingId = null;
-    }
+    if (!confirm('确定删除这笔消费？')) return;
+    await deleteExpense(id);
+    await loadExpenses();
   }
 
   function clearFilters() {
@@ -140,17 +125,11 @@
     loadExpenses();
   }
 
-  function getCatIcon(id: number): string {
-    return categories.find(c => c.id === id)?.icon ?? '📝';
+  function getCatInfo(id: number) {
+    return categories.find(c => c.id === id) ?? { icon: '📝', color: '#6b7280', name: '其他' };
   }
 
-  function getCatColor(id: number): string {
-    return categories.find(c => c.id === id)?.color ?? '#6b7280';
-  }
-
-  function getCatName(id: number): string {
-    return categories.find(c => c.id === id)?.name ?? '其他';
-  }
+  $: filteredTotal = expenses.reduce((s, e) => s + (e.is_refund ? -e.amount_cents : e.amount_cents), 0);
 </script>
 
 <div class="min-h-screen bg-gray-50">
@@ -168,11 +147,9 @@
     <div class="bg-white rounded-2xl shadow-sm p-4">
       <div class="flex gap-2 mb-3">
         <input type="date" bind:value={filterStartDate}
-          class="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-500"
-          placeholder="开始日期" />
+          class="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-500" />
         <input type="date" bind:value={filterEndDate}
-          class="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-500"
-          placeholder="结束日期" />
+          class="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-500" />
       </div>
       <div class="flex gap-2">
         <select bind:value={filterCategoryId}
@@ -187,14 +164,12 @@
       </div>
     </div>
 
-    <!-- 汇总卡片 -->
+    <!-- 汇总 -->
     {#if expenses.length > 0}
       <div class="bg-white rounded-2xl shadow-sm p-4 flex items-center justify-between">
         <div>
           <div class="text-xs text-gray-400">筛选合计</div>
-          <div class="text-2xl font-bold text-indigo-600">
-            ¥{centsToYuan(expenses.reduce((s, e) => s + (e.is_refund ? -e.amount_cents : e.amount_cents), 0))}
-          </div>
+          <div class="text-2xl font-bold text-indigo-600">¥{centsToYuan(filteredTotal)}</div>
         </div>
         <div class="text-right">
           <div class="text-xs text-gray-400">共 {expenses.length} 笔</div>
@@ -206,18 +181,18 @@
     {#each expenses as expense (expense.id)}
       <div class="bg-white rounded-2xl shadow-sm p-4 flex items-center gap-3">
         <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
-          style="background-color: {getCatColor(expense.category_id)}20">
-          {getCatIcon(expense.category_id)}
+          style="background-color: {getCatInfo(expense.category_id).color}20">
+          {getCatInfo(expense.category_id).icon}
         </div>
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2">
-            <span class="font-medium text-gray-800">{getCatName(expense.category_id)}</span>
+            <span class="font-medium text-gray-800">{getCatInfo(expense.category_id).name}</span>
             {#if expense.is_refund}
               <span class="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded">退款</span>
             {/if}
           </div>
           <div class="text-xs text-gray-400 truncate">
-            {expense.merchant ?? expense.remark ?? '—'} · {expense.paid_at.slice(0, 16).replace('T', ' ')}
+            {(expense.merchant ?? expense.remark ?? '—')} · {expense.paid_at.slice(0, 16).replace('T', ' ')}
           </div>
         </div>
         <div class="text-right shrink-0">
@@ -225,10 +200,8 @@
             {expense.is_refund ? '-' : ''}¥{centsToYuan(expense.amount_cents)}
           </div>
           <div class="flex gap-1 mt-1 justify-end">
-            <button type="button" onclick={() => openEdit(expense)} title="编辑"
-              class="p-1 text-gray-400 hover:text-indigo-600 transition">✏️</button>
-            <button type="button" onclick={() => handleDelete(expense.id)} title="删除"
-              class="p-1 text-gray-400 hover:text-red-600 transition">🗑️</button>
+            <button type="button" onclick={() => openEdit(expense)} class="p-1 text-gray-400 hover:text-indigo-600 transition">✏️</button>
+            <button type="button" onclick={() => handleDelete(expense.id)} class="p-1 text-gray-400 hover:text-red-600 transition">🗑️</button>
           </div>
         </div>
       </div>
@@ -243,28 +216,24 @@
     {/if}
   </main>
 
-  <!-- 添加/编辑弹窗 -->
+  <!-- 弹窗 -->
   {#if showForm}
     <div class="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 px-4 py-4">
-      <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-6 space-y-4 animate-slide-up">
+      <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-6 space-y-4">
         <h2 class="font-semibold text-gray-800 text-lg">{editingId ? '编辑记录' : '添加消费'}</h2>
-
         {#if formError}
           <div class="bg-red-50 text-red-600 text-sm px-4 py-2 rounded-xl">{formError}</div>
         {/if}
-
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">金额（元）</label>
           <input type="number" step="0.01" bind:value={formAmount} placeholder="0.00"
             class="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-indigo-500 text-xl font-semibold outline-none" />
         </div>
-
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">时间</label>
           <input type="datetime-local" bind:value={formDate}
             class="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-indigo-500 outline-none" />
         </div>
-
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">分类</label>
           <div class="grid grid-cols-5 gap-2">
@@ -278,7 +247,6 @@
             {/each}
           </div>
         </div>
-
         <div class="flex gap-3">
           <div class="flex-1">
             <label class="block text-sm font-medium text-gray-700 mb-1">商户（选填）</label>
@@ -291,12 +259,10 @@
               class="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-indigo-500 outline-none" />
           </div>
         </div>
-
         <label class="flex items-center gap-3 cursor-pointer">
           <input type="checkbox" bind:checked={formIsRefund} class="w-5 h-5 rounded" />
           <span class="text-sm text-gray-700">退款（负数计入统计）</span>
         </label>
-
         <div class="flex gap-3 pt-2">
           <button onclick={() => { showForm = false; editingId = null; }}
             class="flex-1 bg-gray-100 text-gray-600 py-3 rounded-xl font-medium">取消</button>
@@ -308,14 +274,4 @@
       </div>
     </div>
   {/if}
-
-  <style>
-    @keyframes slide-up {
-      from { transform: translateY(100%); opacity: 0; }
-      to { transform: translateY(0); opacity: 1; }
-    }
-    .animate-slide-up {
-      animation: slide-up 0.2s ease-out;
-    }
-  </style>
 </div>

@@ -89,3 +89,7 @@ export async function seedDefaultCategories(): Promise<void> {
 export async function initDB(): Promise<void> {
   await seedDefaultCategories();
 }
+
+export async function getCategories(): Promise<Category[]> {
+  return db.categories.toArray();
+}
