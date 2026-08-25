@@ -44,6 +44,7 @@ export class XiaoLiujiDB extends Dexie {
   expenses!: EntityTable<Expense, 'id'>;
   categories!: EntityTable<Category, 'id'>;
   budgets!: EntityTable<Budget, 'id'>;
+  settings!: EntityTable<{ key: string; value: string }, 'key'>;
 
   constructor() {
     super('XiaoLiujiDB');
@@ -52,7 +53,8 @@ export class XiaoLiujiDB extends Dexie {
       users: '++id, username',
       expenses: '++id, user_id, [user_id+paid_at], category_id, paid_at',
       categories: '++id, name, is_default',
-      budgets: '++id, [user_id+month], user_id, month'
+      budgets: '++id, [user_id+month], user_id, month',
+      settings: 'key'
     });
   }
 }
