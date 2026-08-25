@@ -139,12 +139,12 @@
       <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-6 space-y-4">
         <h2 class="font-semibold text-gray-800 text-lg">设置预算</h2>
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">预算金额（元）</label>
-          <input type="number" step="0.01" bind:value={addLimit} placeholder="如：3000"
+          <label for="budget-limit" class="block text-sm font-medium text-gray-700 mb-1">预算金额（元）</label>
+          <input id="budget-limit" type="number" step="0.01" bind:value={addLimit} placeholder="如：3000"
             class="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-indigo-500 text-lg font-semibold outline-none" />
         </div>
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">预算类型</label>
+          <label for="budget-type" class="block text-sm font-medium text-gray-700 mb-1">预算类型</label>
           <div class="grid grid-cols-2 gap-2">
             <button type="button" onclick={() => addCategoryId = 0}
               class="py-3 rounded-xl border-2 text-sm font-medium transition

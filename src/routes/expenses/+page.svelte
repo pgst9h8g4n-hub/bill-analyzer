@@ -232,18 +232,18 @@
           <div class="bg-red-50 text-red-600 text-sm px-4 py-2 rounded-xl">{formError}</div>
         {/if}
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">金额（元）</label>
-          <input type="number" step="0.01" bind:value={formAmount} placeholder="0.00"
+          <label for="expense-amount" class="block text-sm font-medium text-gray-700 mb-1">金额（元）</label>
+          <input id="expense-amount" type="number" step="0.01" bind:value={formAmount} placeholder="0.00"
             class="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-indigo-500 text-xl font-semibold outline-none" />
         </div>
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">时间</label>
-          <input type="datetime-local" bind:value={formDate}
+          <label for="expense-datetime" class="block text-sm font-medium text-gray-700 mb-1">时间</label>
+          <input id="expense-datetime" type="datetime-local" bind:value={formDate}
             class="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-indigo-500 outline-none" />
         </div>
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">分类</label>
-          <div class="grid grid-cols-5 gap-2">
+          <span class="block text-sm font-medium text-gray-700 mb-1 sr-only">分类</span>
+          <div class="grid grid-cols-5 gap-2" role="radiogroup" aria-label="选择消费分类">
             {#each categories as cat}
               <button type="button" onclick={() => formCategoryId = cat.id}
                 class="flex flex-col items-center py-2 rounded-xl border-2 transition
@@ -256,12 +256,12 @@
         </div>
         <div class="flex gap-3">
           <div class="flex-1">
-            <label class="block text-sm font-medium text-gray-700 mb-1">商户（选填）</label>
-            <input type="text" bind:value={formMerchant} placeholder="如：星巴克"
+            <label for="expense-merchant" class="block text-sm font-medium text-gray-700 mb-1">商户（选填）</label>
+            <input id="expense-merchant" type="text" bind:value={formMerchant} placeholder="如：星巴克"
               class="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-indigo-500 outline-none" />
           </div>
           <div class="flex-1">
-            <label class="block text-sm font-medium text-gray-700 mb-1">备注（选填）</label>
+            <label for="expense-remark" class="block text-sm font-medium text-gray-700 mb-1">备注（选填）</label>
             <input type="text" bind:value={formRemark} placeholder="备注"
               class="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-indigo-500 outline-none" />
           </div>
