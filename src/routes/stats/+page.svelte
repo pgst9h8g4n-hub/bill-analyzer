@@ -1,47 +1,51 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { currentUserId } from '$lib/session';
   import { goto } from '$app/navigation';
   import * as echarts from 'echarts';
   import {
     getSummary,
     getCategoryStats,
     getDailyTrend,
+    getMonthlyTrend,
     type StatSummary,
     type CategoryStat,
     type DailyStat
   } from '$lib/db/stats';
   import { centsToYuan } from '$lib/utils/format';
-  import { currentUserId } from '$lib/session';
 
   $: userId = $currentUserId;
   let summary: StatSummary = { monthTotal: 0, weekTotal: 0, yesterdayTotal: 0 };
   let categoryStats: CategoryStat[] = [];
   let dailyTrend: DailyStat[] = [];
+  let monthlyTrend: DailyStat[] = [];
   let loading = true;
+  let viewMode = 'month' as 'week' | 'month';
 
   let pieChart: echarts.ECharts | null = null;
-  let lineChart: echarts.ECharts | null = null;
+  let trendChart: echarts.ECharts | null = null;
 
-  onMount(async () => {
+  async function loadData() {
     if (!userId) return;
-
-    const [sum, cats, trend] = await Promise.all([
+    loading = true;
+    const [sum, cats, trend, monthTrend] = await Promise.all([
       getSummary(userId),
       getCategoryStats(userId, new Date().toISOString().slice(0, 7)),
-      getDailyTrend(userId, 7)
+      getDailyTrend(userId, 7),
+      getMonthlyTrend(userId, 12)
     ]);
-
     summary = sum;
     categoryStats = cats;
     dailyTrend = trend;
+    monthlyTrend = monthTrend;
     loading = false;
-
     initCharts();
-  });
+  }
 
   function initCharts() {
+    // 饼图
     const pieDom = document.getElementById('pie-chart');
     if (pieDom) {
+      pieChart?.dispose();
       pieChart = echarts.init(pieDom);
       pieChart.setOption({
         tooltip: { trigger: 'item', formatter: '{b}: ¥{c} ({d}%)' },
@@ -59,37 +63,42 @@
           emphasis: { itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0,0,0,0.5)' } }
         }]
       });
-      pieChart.on('click', (params) => {
-        const name = (params.data as { name?: string })?.name;
-        if (name) {
-          goto(`/expenses?category=${encodeURIComponent(name)}`);
-        }
+      pieChart.on('click', (params: any) => {
+        const name = params?.data?.name as string | undefined;
+        if (name) goto(`/expenses?category=${encodeURIComponent(name)}`);
       });
     }
 
-    const lineDom = document.getElementById('line-chart');
-    if (lineDom) {
-      lineChart = echarts.init(lineDom);
-      lineChart.setOption({
+    // 趋势图（日/月切换）
+    const trendDom = document.getElementById('trend-chart');
+    if (trendDom) {
+      trendChart?.dispose();
+      trendChart = echarts.init(trendDom);
+      const isMonth = viewMode === 'month';
+      const data = isMonth ? monthlyTrend : dailyTrend;
+      const xAxisLabel = isMonth
+        ? data.map(d => d.date.slice(5))
+        : data.map(d => d.date.slice(5));
+
+      trendChart.setOption({
         tooltip: {
           trigger: 'axis',
           formatter: (params: unknown) => {
             const arr = params as { value?: number }[];
-            const val = arr?.[0]?.value ?? 0;
-            return `¥${centsToYuan(val)}`;
+            return `¥${centsToYuan(arr?.[0]?.value ?? 0)}`;
           }
         },
         grid: { top: 10, right: 10, bottom: 25, left: 45 },
         xAxis: {
           type: 'category',
-          data: dailyTrend.map((d: DailyStat) => d.date.slice(5)),
+          data: xAxisLabel,
           axisLine: { show: false },
           axisTick: { show: false },
           axisLabel: { color: '#9ca3af', fontSize: 10 }
         },
         yAxis: {
           type: 'value',
-          splitLine: { lineStyle: { color: '#f3f46' } },
+          splitLine: { lineStyle: { color: '#f3f4f6' } },
           axisLabel: {
             color: '#9ca3af',
             fontSize: 10,
@@ -97,7 +106,7 @@
           }
         },
         series: [{
-          data: dailyTrend.map((d: DailyStat) => d.total),
+          data: data.map(d => d.total),
           type: 'line',
           smooth: true,
           symbol: 'circle',
@@ -115,18 +124,34 @@
           }
         }]
       });
-      lineChart.on('click', (params: { dataIndex?: number }) => {
+
+      trendChart.on('click', (params: { dataIndex?: number }) => {
         if (params.dataIndex !== undefined) {
-          const date = dailyTrend[params.dataIndex]?.date;
-          if (date) goto(`/expenses?startDate=${date}&endDate=${date}`);
+          const date = data[params.dataIndex]?.date;
+          if (date) {
+            if (isMonth) {
+              goto(`/expenses?startDate=${date}-01&endDate=${date}-31`);
+            } else {
+              goto(`/expenses?startDate=${date}&endDate=${date}`);
+            }
+          }
         }
       });
     }
 
     window.addEventListener('resize', () => {
       pieChart?.resize();
-      lineChart?.resize();
+      trendChart?.resize();
     });
+  }
+
+  function switchView(mode: 'week' | 'month') {
+    viewMode = mode;
+    initCharts();
+  }
+
+  $: if (userId > 0 && !loading) {
+    loadData();
   }
 </script>
 
@@ -138,6 +163,7 @@
         <p class="text-sm">加载中...</p>
       </div>
     {:else}
+      <!-- 汇总卡片 -->
       <div class="grid grid-cols-3 gap-3">
         <div class="bg-white rounded-2xl shadow-sm p-4 text-center">
           <div class="text-xs text-gray-400 mb-1">本月</div>
@@ -153,6 +179,31 @@
         </div>
       </div>
 
+      <!-- 趋势图 + 视图切换 -->
+      <div class="bg-white rounded-2xl shadow-sm p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-semibold text-gray-800">
+            {viewMode === 'month' ? '月度支出趋势（近12月）' : '每日支出趋势（近7日）'}
+          </h2>
+          <div class="flex bg-gray-100 rounded-lg p-0.5">
+            <button
+              onclick={() => switchView('week')}
+              class="px-3 py-1 text-xs font-medium rounded-md transition
+                {viewMode === 'week' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500'}">
+              日
+            </button>
+            <button
+              onclick={() => switchView('month')}
+              class="px-3 py-1 text-xs font-medium rounded-md transition
+                {viewMode === 'month' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500'}">
+              月
+            </button>
+          </div>
+        </div>
+        <div id="trend-chart" style="width:100%;height:200px;"></div>
+      </div>
+
+      <!-- 分类饼图 -->
       <div class="bg-white rounded-2xl shadow-sm p-4">
         <h2 class="font-semibold text-gray-800 mb-3">分类支出占比</h2>
         <div id="pie-chart" style="width:100%;height:220px;"></div>
@@ -161,11 +212,7 @@
         {/if}
       </div>
 
-      <div class="bg-white rounded-2xl shadow-sm p-4">
-        <h2 class="font-semibold text-gray-800 mb-3">近7日支出趋势</h2>
-        <div id="line-chart" style="width:100%;height:200px;"></div>
-      </div>
-
+      <!-- 分类明细 -->
       {#if categoryStats.length > 0}
         <div class="bg-white rounded-2xl shadow-sm p-4">
           <h2 class="font-semibold text-gray-800 mb-3">分类明细</h2>

@@ -1,18 +1,26 @@
 <script lang="ts">
   import { currentUserId } from '$lib/session';
-  import { getSummary } from '$lib/db/stats';
-  import { getExpenses } from '$lib/db/expenses';
+  import { getSummary, getRecentExpenses } from '$lib/db/stats';
+  import { getCategories } from '$lib/db';
   import { centsToYuan } from '$lib/utils/format';
-  import type { Expense } from '$lib/db';
+  import type { Expense, Category } from '$lib/db';
 
   $: userId = $currentUserId;
   let summary = { monthTotal: 0, weekTotal: 0, yesterdayTotal: 0 };
   let recentExpenses: Expense[] = [];
+  let categories: Category[] = [];
+  let currentMonthLabel = '';
 
   $: if (userId > 0) {
-    getSummary(userId).then(s => summary = s);
-    getExpenses(userId, { startDate: new Date().toISOString().slice(0, 10) }).then(exps => {
-      recentExpenses = exps.slice(0, 5);
+    const now = new Date();
+    currentMonthLabel = `${now.getFullYear()}年${now.getMonth() + 1}月`;
+
+    getSummary(userId).then(s => summary = s).catch(() => {});
+    getRecentExpenses(userId, 5).then(exps => {
+      recentExpenses = exps;
+    }).catch(() => {});
+    getCategories().then(cs => {
+      categories = cs;
     }).catch(() => {});
   }
 </script>
@@ -43,7 +51,7 @@
       <div class="bg-white rounded-2xl shadow-sm p-4">
         <div class="flex items-center justify-between mb-3">
           <h2 class="font-semibold text-gray-800">本月概览</h2>
-          <span class="text-xs text-gray-400">2026年8月</span>
+          <span class="text-xs text-gray-400">{currentMonthLabel}</span>
         </div>
         <div class="text-3xl font-bold text-indigo-600">¥{centsToYuan(summary.monthTotal)}</div>
         <p class="text-xs text-gray-400 mt-1">本月总支出</p>
@@ -71,17 +79,27 @@
         {#if recentExpenses.length > 0}
           <div class="space-y-2">
             {#each recentExpenses as expense}
-              <div class="flex items-center gap-3">
-                <div class="w-8 h-8 rounded-lg flex items-center justify-center text-lg shrink-0"
-                  style="background-color: #{expense.category_id}; opacity: 0.15">
-                  📝
-                </div>
-                <div class="flex-1 min-w-0">
-                  <div class="text-sm font-medium text-gray-800 truncate">{expense.merchant ?? '—'}</div>
-                  <div class="text-xs text-gray-400">{expense.paid_at.slice(0, 16).replace('T', ' ')}</div>
-                </div>
-                <div class="font-semibold text-gray-800">¥{centsToYuan(expense.amount_cents)}</div>
-              </div>
+              {#each categories as cat (cat.id)}
+                {#if cat.id === expense.category_id}
+                  <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-lg flex items-center justify-center text-lg shrink-0"
+                      style="background-color: {cat.color}20">
+                      {cat.icon}
+                    </div>
+                    <div class="flex-1 min-w-0">
+                      <div class="text-sm font-medium text-gray-800 truncate">
+                        {expense.merchant ?? cat.name}
+                      </div>
+                      <div class="text-xs text-gray-400">
+                        {expense.paid_at.slice(0, 16).replace('T', ' ')}
+                      </div>
+                    </div>
+                    <div class="font-semibold text-gray-800">
+                      ¥{centsToYuan(expense.amount_cents)}
+                    </div>
+                  </div>
+                {/if}
+              {/each}
             {/each}
           </div>
         {:else}

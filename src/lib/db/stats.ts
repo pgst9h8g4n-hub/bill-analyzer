@@ -86,6 +86,42 @@ export async function getCategoryStats(userId: number, month: string): Promise<C
   }
 }
 
+export async function getRecentExpenses(userId: number, limit: number = 5): Promise<Expense[]> {
+  try {
+    return db.expenses
+      .where('user_id').equals(userId)
+      .reverse()
+      .limit(limit)
+      .toArray();
+  } catch {
+    return [];
+  }
+}
+
+export async function getMonthlyTrend(userId: number, months: number = 12): Promise<DailyStat[]> {
+  try {
+    const now = new Date();
+    const result: DailyStat[] = [];
+
+    for (let i = 0; i < months; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const monthStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const prefix = monthStr + '-';
+
+      const expenses = await db.expenses
+        .where('user_id').equals(userId)
+        .and((e) => e.paid_at.startsWith(prefix))
+        .toArray();
+
+      const total = expenses.reduce(netReduce, 0);
+      result.unshift({ date: monthStr, total });
+    }
+    return result;
+  } catch {
+    return [];
+  }
+}
+
 export async function getDailyTrend(userId: number, days: number): Promise<DailyStat[]> {
   try {
     const now = new Date();
