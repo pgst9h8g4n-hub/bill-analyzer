@@ -21,6 +21,10 @@
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "deploy:pages": "npm run build && gh-pages -d build -t true"
+  },
+  "devDependencies": {
+    "gh-pages": "^6.3.0"
   }
 }
