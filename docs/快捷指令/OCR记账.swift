@@ -14,7 +14,7 @@ import Photos
 import UIKit
 
 // ⚠️ 替换为你实际部署的域名
-let BASE_URL = "https://bill-analyzer-g4xwy0i0v-pgst9h8g4n-hubs-projects.vercel.app"
+let BASE_URL = "https://pgst9h8g4n-hub.github.io/bill-analyzer"
 
 // 请求相册权限
 PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
