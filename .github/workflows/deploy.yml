@@ -1,0 +1,37 @@
+name: Deploy to Vercel
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+
+      - uses: amondnet/vercel-action@v25
+        id: vercel-deploy
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-args: '--prod'
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Update iOS shortcut BASE_URL
+        run: |
+          DEPLOY_URL="${{ steps.vercel-deploy.outputs.VERCEL_URL }}"
+          sed -i "s|https://bill-analyzer-lac.vercel.app|$DEPLOY_URL|g" "Docs/快捷指令/OCR记账.swift"
+          git diff --quiet || (git add "Docs/快捷指令/OCR记账.swift" && git commit -m "deploy: 更新快捷指令 BASE_URL → $DEPLOY_URL")
