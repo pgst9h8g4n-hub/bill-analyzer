@@ -7,6 +7,7 @@
   import type { Category } from '$lib/db';
   import { currentUserId, currentLedgerId } from '$lib/session';
   import { createWorker, type Worker as TesseractWorker } from 'tesseract.js';
+  import { get } from 'svelte/store';
 
   let ocrAmount = '';
   let ocrTime = new Date().toISOString().slice(0, 16);
@@ -30,9 +31,8 @@
   const _OCR_DEBUG_PH = '粘贴OCR识别出的文字，然后点一键应用测试解析效果';
   let manualApply = false;
 
-  // 用 Svelte 响应式订阅代替手动 subscribe，确保 ledgerId 变化时自动加载分类
-  $: userId = $currentUserId;
-  $: ledgerId = $currentLedgerId;
+  let userId = 0;
+  let ledgerId = 0;
 
   // 更精确的商户/分类关键词排序：长词优先、具体优先于泛化
   // 规则顺序：越具体的越靠前，支付平台/泛词放最后
@@ -820,17 +820,27 @@
   }
 
   onMount(() => {
-    // 与 stats 页面一致：先读初始值，再订阅变化
-    const initLedgerId = $currentLedgerId;
+    // 先读初始值
+    const initUserId = get(currentUserId);
+    const initLedgerId = get(currentLedgerId);
+    if (initUserId > 0) userId = initUserId;
     if (initLedgerId > 0) ledgerId = initLedgerId;
-    currentLedgerId.subscribe(v => {
+
+    // 订阅变化
+    const unsubUser = currentUserId.subscribe(v => {
+      if (v !== userId) { userId = v; loadCategoriesNow(); }
+    });
+    const unsubLedger = currentLedgerId.subscribe(v => {
       if (v !== ledgerId && v > 0) {
         ledgerId = v;
         loadCategoriesNow();
       }
     });
+
     // 初始加载（在 subscribe 之前）
     if (ledgerId > 0) loadCategoriesNow();
+
+    return () => { unsubUser(); unsubLedger(); };
   });
 
   async function loadCategoriesNow() {
