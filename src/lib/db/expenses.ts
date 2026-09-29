@@ -20,13 +20,13 @@ function netReduce(s: number, e: Expense): number {
   return s + (e.is_refund ? -e.amount_cents : e.amount_cents);
 }
 
-export async function getExpenses(userId: number, filters?: ExpenseFilters): Promise<Expense[]> {
+export async function getExpenses(ledgerId: number, filters?: ExpenseFilters): Promise<Expense[]> {
   try {
     if (!filters?.startDate && !filters?.endDate && !filters?.categoryId) {
-      return db.expenses.where('user_id').equals(userId).reverse().toArray();
+      return db.expenses.where('ledger_id').equals(ledgerId).reverse().toArray();
     }
 
-    const base = db.expenses.where('user_id').equals(userId);
+    const base = db.expenses.where('ledger_id').equals(ledgerId);
 
     if (filters?.startDate && filters?.endDate) {
       return base
@@ -48,9 +48,10 @@ export async function getExpenses(userId: number, filters?: ExpenseFilters): Pro
   }
 }
 
-export async function createExpense(userId: number, data: ExpenseFormData): Promise<void> {
+export async function createExpense(ledgerId: number, data: ExpenseFormData & { userId: number }): Promise<void> {
   await db.expenses.add({
-    user_id: userId,
+    user_id: data.userId,
+    ledger_id: ledgerId,
     amount_cents: Math.round(parseFloat(data.amount) * 100),
     category_id: data.categoryId,
     merchant: data.merchant,
@@ -88,11 +89,11 @@ export async function deleteExpense(id: number): Promise<void> {
   }
 }
 
-export async function getTotalByMonth(userId: number, month: string): Promise<number> {
+export async function getTotalByMonth(ledgerId: number, month: string): Promise<number> {
   try {
     const prefix = month + '-';
     const expenses = await db.expenses
-      .where('user_id').equals(userId)
+      .where('ledger_id').equals(ledgerId)
       .and((e) => e.paid_at.startsWith(prefix))
       .toArray();
     return expenses.reduce(netReduce, 0);
@@ -101,11 +102,11 @@ export async function getTotalByMonth(userId: number, month: string): Promise<nu
   }
 }
 
-export async function getExpensesByCategory(userId: number, month: string): Promise<Array<{ category: Category; total: number }>> {
+export async function getExpensesByCategory(ledgerId: number, month: string): Promise<Array<{ category: Category; total: number }>> {
   try {
     const prefix = month + '-';
     const expenses = await db.expenses
-      .where('user_id').equals(userId)
+      .where('ledger_id').equals(ledgerId)
       .and((e) => e.paid_at.startsWith(prefix))
       .toArray();
 
@@ -115,7 +116,7 @@ export async function getExpensesByCategory(userId: number, month: string): Prom
       byCat.set(e.category_id, (byCat.get(e.category_id) ?? 0) + val);
     }
 
-    const categories = await db.categories.toArray();
+    const categories = await db.categories.where('ledger_id').equals(ledgerId).toArray();
     return Array.from(byCat.entries())
       .map(([catId, total]) => ({
         category: categories.find(c => c.id === catId)!,
@@ -128,7 +129,7 @@ export async function getExpensesByCategory(userId: number, month: string): Prom
   }
 }
 
-export async function getDailySpending(userId: number, days: number): Promise<Array<{ date: string; total: number }>> {
+export async function getDailySpending(ledgerId: number, days: number): Promise<Array<{ date: string; total: number }>> {
   try {
     const now = new Date();
     const result: Array<{ date: string; total: number }> = [];
@@ -142,7 +143,7 @@ export async function getDailySpending(userId: number, days: number): Promise<Ar
       const nextDateStr = nextDate.toISOString().slice(0, 10);
 
       const expenses = await db.expenses
-        .where('user_id').equals(userId)
+        .where('ledger_id').equals(ledgerId)
         .and((e) => e.paid_at >= dateStr && e.paid_at < nextDateStr)
         .toArray();
 

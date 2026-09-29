@@ -1,7 +1,7 @@
 import { db } from '$lib/db';
 import type { Expense } from '$lib/db';
 
-export async function exportCSV(userId: number, expenses: Expense[]): Promise<string> {
+export async function exportCSV(ledgerId: number, expenses: Expense[]): Promise<string> {
   const header = '日期,时间,金额(元),类型,商户,备注,是否退款\n';
   const rows = expenses.map(e => {
     const d = new Date(e.paid_at);
@@ -13,10 +13,10 @@ export async function exportCSV(userId: number, expenses: Expense[]): Promise<st
   return '﻿' + header + rows.join('\n');
 }
 
-export async function exportJSON(userId: number, expenses: Expense[]): Promise<string> {
+export async function exportJSON(ledgerId: number, expenses: Expense[]): Promise<string> {
   return JSON.stringify(expenses, null, 2);
 }
 
-export async function getExpensesForExport(userId: number): Promise<Expense[]> {
-  return db.expenses.where('user_id').equals(userId).toArray();
+export async function getExpensesForExport(ledgerId: number): Promise<Expense[]> {
+  return db.expenses.where('ledger_id').equals(ledgerId).toArray();
 }

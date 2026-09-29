@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "bill-analyzer",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "dev", "--host", "0.0.0.0", "--port", "4175"],
+      "port": 4175,
+      "cwd": "E:/消费记账软件/bill-analyzer"
+    }
+  ]
+}

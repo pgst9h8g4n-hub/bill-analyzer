@@ -1,6 +1,9 @@
 import { writable } from 'svelte/store';
 import bcrypt from 'bcryptjs';
 import { db, type User } from '$lib/db';
+import { seedDefaultCategories } from '$lib/db';
+import { getUserLedgers } from '$lib/db/ledgers';
+import { setActiveLedger, getActiveLedger } from '$lib/stores/ledger';
 
 export interface Session {
   userId: number;
@@ -67,7 +70,9 @@ export async function changePassword(userId: number, oldPassword: string, newPas
 }
 
 export async function deleteUser(userId: number): Promise<void> {
-  await db.transaction('rw', db.expenses, db.budgets, db.users, async () => {
+  // 删除该用户所有账本成员关系和消费记录，但保留其他用户的账本数据
+  await db.transaction('rw', db.members, db.expenses, db.budgets, db.users, async () => {
+    await db.members.where('user_id').equals(userId).delete();
     await db.expenses.where('user_id').equals(userId).delete();
     await db.budgets.where('user_id').equals(userId).delete();
     await db.users.where('id').equals(userId).delete();

@@ -21,7 +21,7 @@ function netReduce(s: number, e: Expense): number {
   return s + (e.is_refund ? -e.amount_cents : e.amount_cents);
 }
 
-export async function getSummary(userId: number): Promise<StatSummary> {
+export async function getSummary(ledgerId: number): Promise<StatSummary> {
   try {
     const now = new Date();
     const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -39,7 +39,7 @@ export async function getSummary(userId: number): Promise<StatSummary> {
     weekEnd.setHours(0, 0, 0, 0);
     const weekEndStr = weekEnd.toISOString().slice(0, 10);
 
-    const allExpenses = await db.expenses.where('user_id').equals(userId).toArray();
+    const allExpenses = await db.expenses.where('ledger_id').equals(ledgerId).toArray();
 
     const monthTotal = allExpenses
       .filter(e => e.paid_at.startsWith(currentMonth))
@@ -59,11 +59,11 @@ export async function getSummary(userId: number): Promise<StatSummary> {
   }
 }
 
-export async function getCategoryStats(userId: number, month: string): Promise<CategoryStat[]> {
+export async function getCategoryStats(ledgerId: number, month: string): Promise<CategoryStat[]> {
   try {
     const prefix = month + '-';
     const expenses = await db.expenses
-      .where('user_id').equals(userId)
+      .where('ledger_id').equals(ledgerId)
       .and((e) => e.paid_at.startsWith(prefix))
       .toArray();
 
@@ -73,7 +73,7 @@ export async function getCategoryStats(userId: number, month: string): Promise<C
       byCat.set(e.category_id, (byCat.get(e.category_id) ?? 0) + val);
     }
 
-    const categories = await db.categories.toArray();
+    const categories = await db.categories.where('ledger_id').equals(ledgerId).toArray();
     return Array.from(byCat.entries())
       .map(([catId, total]) => ({
         category: categories.find(c => c.id === catId)!,
@@ -86,10 +86,10 @@ export async function getCategoryStats(userId: number, month: string): Promise<C
   }
 }
 
-export async function getRecentExpenses(userId: number, limit: number = 5): Promise<Expense[]> {
+export async function getRecentExpenses(ledgerId: number, limit: number = 5): Promise<Expense[]> {
   try {
     return db.expenses
-      .where('user_id').equals(userId)
+      .where('ledger_id').equals(ledgerId)
       .reverse()
       .limit(limit)
       .toArray();
@@ -98,7 +98,7 @@ export async function getRecentExpenses(userId: number, limit: number = 5): Prom
   }
 }
 
-export async function getMonthlyTrend(userId: number, months: number = 12): Promise<DailyStat[]> {
+export async function getMonthlyTrend(ledgerId: number, months: number = 12): Promise<DailyStat[]> {
   try {
     const now = new Date();
     const result: DailyStat[] = [];
@@ -109,7 +109,7 @@ export async function getMonthlyTrend(userId: number, months: number = 12): Prom
       const prefix = monthStr + '-';
 
       const expenses = await db.expenses
-        .where('user_id').equals(userId)
+        .where('ledger_id').equals(ledgerId)
         .and((e) => e.paid_at.startsWith(prefix))
         .toArray();
 
@@ -122,7 +122,7 @@ export async function getMonthlyTrend(userId: number, months: number = 12): Prom
   }
 }
 
-export async function getDailyTrend(userId: number, days: number): Promise<DailyStat[]> {
+export async function getDailyTrend(ledgerId: number, days: number): Promise<DailyStat[]> {
   try {
     const now = new Date();
     const result: DailyStat[] = [];
@@ -136,7 +136,7 @@ export async function getDailyTrend(userId: number, days: number): Promise<Daily
       const nextDateStr = nextDate.toISOString().slice(0, 10);
 
       const expenses = await db.expenses
-        .where('user_id').equals(userId)
+        .where('ledger_id').equals(ledgerId)
         .and((e) => e.paid_at >= dateStr && e.paid_at < nextDateStr)
         .toArray();
 
