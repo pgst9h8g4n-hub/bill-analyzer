@@ -49,7 +49,7 @@
     try {
       await deleteUser(userId);
       clearSession();
-      sessionStorage.removeItem('xiaoliuji_session');
+      localStorage.removeItem('xiaoliuji_session');
       goto('/login');
     } catch {
       passwordMsg = '❌ 删除失败，请重试';
