@@ -23,6 +23,10 @@
   let ocrModeValue = 'auto';
   let hasConfig = false;
 
+  // 订阅 mode 变化，保持本地状态与 store 同步
+  ocrMode.subscribe(v => { ocrModeValue = v; })();
+  ocrProvider.subscribe(v => { ocrProviderName = v; })();
+
   onMount(async () => {
     const config = await getOCRConfig();
     if (config) {
@@ -31,8 +35,6 @@
       secretKey = config.secretKey;
       hasConfig = true;
     }
-    ocrMode.subscribe(v => ocrModeValue = v)();
-    ocrProvider.subscribe(v => ocrProviderName = v)();
   });
 
   async function handleChangePassword() {
@@ -80,6 +82,8 @@
         apiKey,
         secretKey
       });
+      // 同步模式到 store
+      ocrMode.set(ocrModeValue as 'local' | 'cloud' | 'auto' | 'smart');
       hasConfig = true;
       ocrMsg = '✅ 配置保存成功！';
       // 更新 OCR 页面状态

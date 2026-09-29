@@ -596,9 +596,26 @@
         const config = await (await import('$lib/ocr/cloud')).getOCRConfig();
         if (config) {
           const imageBase64 = imageDataUrl.split(',')[1];
-          const cloudResult = await callCloudOCR(imageBase64, config);
+          // 使用本地代理 API 避免 CORS 问题
+          const resp = await fetch('/api/ocr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              provider: config.provider,
+              apiKey: config.apiKey,
+              secretKey: config.secretKey,
+              imageBase64
+            })
+          });
+          const cloudResult = await resp.json();
+          if (cloudResult.error) {
+            throw new Error(cloudResult.details || cloudResult.error);
+          }
           fullText = cloudResult.text;
-          console.log('[OCR] 云端识别成功，provider:', cloudResult.provider);
+          console.log('[OCR] 云端识别成功，provider:', cloudResult.provider, 'confidence:', cloudResult.confidence);
+          // 更新今日配额
+          const { incrementCloudQuota } = await import('$lib/ocr/cloud');
+          await incrementCloudQuota();
         }
       } catch (e) {
         cloudOCRError = '云端 OCR 失败: ' + (e as Error).message;
