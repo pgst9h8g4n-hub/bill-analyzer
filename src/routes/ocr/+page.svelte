@@ -1083,7 +1083,7 @@
           <span class="text-sm font-medium text-ink">云端 OCR</span>
           <span class="text-xs text-green-600 font-medium">已配置</span>
         </div>
-        <p class="text-xs text-stone-400 mb-3">本地识别失败时自动使用云端 OCR（{ocrProvider === 'baidu' ? '百度' : '腾讯云'}）</p>
+        <p class="text-xs text-stone-400 mb-3">本地识别失败时自动使用云端 OCR（{$ocrProvider === 'baidu' ? '百度' : '腾讯云'}）</p>
         <a href="/settings#ocr" class="text-sm text-clay-600 font-medium hover:text-clay-700">配置 API Key →</a>
       </div>
       {:else}
