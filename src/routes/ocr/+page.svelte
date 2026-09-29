@@ -563,35 +563,32 @@
       fullText = psmResults[1];
     }
 
-    // 如果本地 OCR 没识别到金额，尝试云端 OCR
+    // 智能判断是否使用云端：smart 模式下检查额度 + 配置
+    let useCloud = false;
+    const currentMode = $ocrMode;
+
+    // 检查本地是否已识别到金额
     const localClassified = collectClassifiedAmounts(fullText || '');
     const hasLocalAmount = localClassified.paid.length > 0 || localClassified.fulltextBig.length > 0;
 
-    // 智能判断是否使用云端：smart 模式下检查额度 + 配置
-    let useCloud = false;
-    if (!hasLocalAmount && cloudHasConfig) {
-      const currentMode = $ocrMode;
-      const smartConfig = await getSmartModeConfig();
-      const quota = await getTodayCloudQuota();
-      const quotaNearlyExhausted = await isCloudQuotaNearlyExhausted();
-
+    if (cloudHasConfig) {
       if (currentMode === 'cloud') {
-        useCloud = true;
-      } else if (currentMode === 'auto') {
-        useCloud = !hasLocalAmount;
+        useCloud = true; // 强制云端
       } else if (currentMode === 'smart') {
-        // 智能模式：云端优先，额度耗尽或失败后降级本地
-        if (smartConfig.cloudFirst) {
-          if (quota.count < 100 && !quotaNearlyExhausted) {
-            useCloud = true; // 有额度，使用云端
-          } else {
-            useCloud = false; // 额度不足，降级本地
-          }
+        // 智能模式：云端优先，但本地成功时不强制覆盖
+        const smartConfig = await (await import('$lib/ocr/cloud')).getSmartModeConfig();
+        const quota = await (await import('$lib/ocr/cloud')).getTodayCloudQuota();
+        const quotaNearlyExhausted = await (await import('$lib/ocr/cloud')).isCloudQuotaNearlyExhausted();
+
+        if (smartConfig.cloudFirst && quota.count < 100 && !quotaNearlyExhausted) {
+          useCloud = true; // 有额度，优先云端
         }
+      } else if (currentMode === 'auto') {
+        useCloud = !hasLocalAmount; // 自动：本地失败时才用云端
       }
     }
 
-    console.log('[OCR] useCloud=', useCloud, 'mode=', $ocrMode, 'quota=', await getTodayCloudQuota());
+    console.log('[OCR] useCloud=', useCloud, 'mode=', currentMode, 'hasLocalAmount=', hasLocalAmount, 'quota=', await (await import('$lib/ocr/cloud')).getTodayCloudQuota());
 
     if (useCloud) {
       try {
