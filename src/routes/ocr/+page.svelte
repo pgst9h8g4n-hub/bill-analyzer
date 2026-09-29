@@ -30,8 +30,12 @@
   const _OCR_DEBUG_PH = '粘贴OCR识别出的文字，然后点一键应用测试解析效果';
   let manualApply = false;
 
-  let userId = 0;
-  let ledgerId = 0;
+  // 用 Svelte 响应式订阅代替手动 subscribe，确保 ledgerId 变化时自动加载分类
+  $: userId = $currentUserId;
+  $: ledgerId = $currentLedgerId;
+  $: if (ledgerId > 0) {
+    loadCategoriesNow();
+  }
 
   // 更精确的商户/分类关键词排序：长词优先、具体优先于泛化
   // 规则顺序：越具体的越靠前，支付平台/泛词放最后
@@ -819,20 +823,12 @@
   }
 
   onMount(() => {
-    // useAuth 在 layout 里异步赋值 currentUserId/currentLedgerId，
-    // 所以必须用 subscribe 回调拿到的最新值，不能读 .source（mount 时还是 0/undefined）。
-    const unsubUser = currentUserId.subscribe((uid) => {
-      userId = uid;
-      loadCategories();
-    });
-    const unsubLedger = currentLedgerId.subscribe((lid) => {
-      ledgerId = lid;
-      loadCategories();
-    });
-    return () => { unsubUser(); unsubLedger(); };
+    // 首次加载（在 subscribe 之前先读一次当前值，防止 mount 时 ledgerId 已就绪但 subscribe 回调未触发）
+    const initialLedgerId = $currentLedgerId;
+    if (initialLedgerId > 0) loadCategoriesNow();
   });
 
-  async function loadCategories() {
+  async function loadCategoriesNow() {
     if (ledgerId <= 0) {
       console.log('[OCR] loadCategories skipped: ledgerId=', ledgerId);
       return;
@@ -852,7 +848,7 @@
   }
 
   // 保留原函数名以兼容其他调用点（如 OCR 结果里直接调 applyCategorySelection）
-  async function ensureCategories() { await loadCategories(); }
+  async function ensureCategories() { loadCategoriesNow(); }
 
   async function handleSubmit() {
     errorMsg = '';
