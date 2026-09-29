@@ -837,13 +837,18 @@
       console.log('[OCR] loadCategories skipped: ledgerId=', ledgerId);
       return;
     }
-    const cats = await getCategories(ledgerId);
-    console.log('[OCR] categories loaded:', cats.length, cats.map(c => c.name).join(','));
-    categories = cats;
-    if (cats.length > 0 && selectedCategory === 0) {
-      selectedCategory = cats[0].id;
+    try {
+      const cats = await getCategories(ledgerId);
+      console.log('[OCR] categories loaded:', cats.length, cats.map(c => c.name).join(','));
+      categories = cats;
+      if (cats.length > 0 && selectedCategory === 0) {
+        selectedCategory = cats[0].id;
+      }
+      applyCategorySelection();
+    } catch (e) {
+      console.error('[OCR] loadCategories failed:', e);
+      errorMsg = '分类加载失败，请刷新重试';
     }
-    applyCategorySelection();
   }
 
   // 保留原函数名以兼容其他调用点（如 OCR 结果里直接调 applyCategorySelection）
