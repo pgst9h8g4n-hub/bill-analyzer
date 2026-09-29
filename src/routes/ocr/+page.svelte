@@ -829,6 +829,7 @@
   });
 
   async function loadCategoriesNow() {
+    console.log('[OCR] loadCategoriesNow called, ledgerId=', ledgerId, 'userId=', userId);
     if (ledgerId <= 0) {
       console.log('[OCR] loadCategories skipped: ledgerId=', ledgerId);
       return;
