@@ -824,23 +824,21 @@
     const initUserId = get(currentUserId);
     const initLedgerId = get(currentLedgerId);
     if (initUserId > 0) userId = initUserId;
-    if (initLedgerId > 0) ledgerId = initLedgerId;
+    if (initLedgerId > 0) {
+      ledgerId = initLedgerId;
+      loadCategoriesNow();
+    }
 
     // 订阅变化
-    const unsubUser = currentUserId.subscribe(v => {
-      if (v !== userId) { userId = v; loadCategoriesNow(); }
+    currentUserId.subscribe(v => {
+      if (v !== userId) userId = v;
     });
-    const unsubLedger = currentLedgerId.subscribe(v => {
+    currentLedgerId.subscribe(v => {
       if (v !== ledgerId && v > 0) {
         ledgerId = v;
         loadCategoriesNow();
       }
     });
-
-    // 初始加载（在 subscribe 之前）
-    if (ledgerId > 0) loadCategoriesNow();
-
-    return () => { unsubUser(); unsubLedger(); };
   });
 
   async function loadCategoriesNow() {
