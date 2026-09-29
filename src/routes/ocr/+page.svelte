@@ -8,6 +8,8 @@
   import { currentUserId, currentLedgerId } from '$lib/session';
   import { createWorker, type Worker as TesseractWorker } from 'tesseract.js';
   import { get } from 'svelte/store';
+  import { ocrMode, ocrProvider, loadOCRConfig } from '$lib/stores/ocr-config';
+  import { callCloudOCR, type OCRConfig } from '$lib/ocr/cloud';
 
   let ocrAmount = '';
   let ocrTime = new Date().toISOString().slice(0, 16);
@@ -22,6 +24,10 @@
   let ocrProgress = 0;
   let ocrRunning = false;
   let ocrError = '';
+  // 云端 OCR 相关状态
+  let cloudOCRInProgress = false;
+  let cloudOCRError = '';
+  let cloudHasConfig = false;
   let categories: Category[] = [];
   let selectedImage: string | null = null;
   let cameraInput: HTMLInputElement | undefined;
@@ -170,6 +176,26 @@
       if (!isNaN(val) && val >= 1 && val <= 999999) return val;
     }
     return null;
+  }
+
+  // 后处理：修正 Tesseract 常见数字混淆
+  // 0↔6↔8, 1↔7, 2↔3, 4↔9, 5↔6 等
+  function correctAmountDigits(amount: string): string {
+    // 金额常见模式：X.XX 或 XX.XX 或 XXX.XX
+    // 修正策略：如果小数部分以 2/3/5/6/8/9 结尾，尝试映射到 0
+    // 因为 "24.52" 很可能是 "24.50"（Tesseract 常把 0 识别为 2/5/6/8/9）
+    const corrected = amount.replace(/\.(\d)(\d)$/, (match, d1, d2) => {
+      // 角分位常见混淆映射
+      const map: Record<string, string> = {
+        '2': '0', '3': '0', '5': '0', '6': '0', '8': '0', '9': '0',
+        '4': '0', '7': '0', // 较少见但可能
+      };
+      // 如果分位是 2/3/5/6/8/9，且角位是 5，极可能是 .50
+      if (map[d2] && d1 === '5') return `.5${map[d2]}`;
+      // 如果分位是常见混淆，保持原样（让用户手动修改）
+      return match;
+    });
+    return corrected;
   }
 
   // Classify every amount in the text by its surrounding label:
@@ -499,11 +525,21 @@
     });
   }
 
+  // 多 PSM 尝试：不同分页模式对账单截图效果不同
+  async function runOCRWithPSM(imageDataUrl: string, psm: number): Promise<string> {
+    await initWorker(psm);
+    if (ocrError) return '';
+    const processedUrl = await preprocessImage(imageDataUrl, 3);
+    const { data } = await worker!.recognize(processedUrl);
+    return data.text.trim();
+  }
+
   async function runOCR(imageDataUrl: string) {
     ocrError = '';
     ocrRunning = true;
     ocrProgress = 5;
     errorMsg = '';
+    cloudOCRError = '';
 
     // Preload the image ONCE (shared by both detection and preprocessing)
     const img = await loadImage(imageDataUrl);
@@ -513,15 +549,40 @@
       return;
     }
 
-    // Step 1: Full-page OCR (single PSM pass) — the amount is reliably in the text,
-    // and we need it for merchant / time / category too.
+    // Step 1: Full-page OCR — 尝试多种 PSM，取最优结果
+    // PSM 4: 单列文本（适合账单）；PSM 11: 稀疏文本（适合复杂布局）
     ocrProgress = 10;
-    const processedUrl = await preprocessImage(imageDataUrl, 3);
-    await initWorker(4);
-    let fullText = '';
-    if (!ocrError) {
-      const { data } = await worker!.recognize(processedUrl);
-      fullText = data.text.trim();
+    const psmResults = await Promise.all([
+      runOCRWithPSM(imageDataUrl, 4).catch(() => ''),
+      runOCRWithPSM(imageDataUrl, 11).catch(() => ''),
+    ]);
+    // 选择包含更多有效金额的文本
+    let fullText = psmResults[0] || psmResults[1] || '';
+    const amountCount = (t: string) => (t.match(/\d+\.\d{2}/g) || []).length;
+    if (amountCount(psmResults[1]) > amountCount(psmResults[0])) {
+      fullText = psmResults[1];
+    }
+
+    // 如果本地 OCR 没识别到金额，尝试云端 OCR
+    const localClassified = collectClassifiedAmounts(fullText || '');
+    const hasLocalAmount = localClassified.paid.length > 0 || localClassified.fulltextBig.length > 0;
+    const useCloud = !hasLocalAmount && cloudHasConfig && ($ocrMode === 'cloud' || $ocrMode === 'auto');
+
+    if (useCloud) {
+      try {
+        ocrProgress = 15;
+        const config = await (await import('$lib/ocr/cloud')).getOCRConfig();
+        if (config) {
+          const imageBase64 = imageDataUrl.split(',')[1];
+          const cloudResult = await callCloudOCR(imageBase64, config);
+          fullText = cloudResult.text;
+          console.log('[OCR] 云端识别成功，provider:', cloudResult.provider);
+        }
+      } catch (e) {
+        cloudOCRError = '云端 OCR 失败: ' + (e as Error).message;
+        console.error('[OCR] 云端 OCR 失败:', e);
+        // 继续用本地结果
+      }
     }
 
     // Step 2: Full-page Chinese OCR → merchant / category / time.
@@ -848,6 +909,11 @@
         loadCategoriesNow();
       }
     });
+
+    // 检查云端配置
+    (async () => {
+      cloudHasConfig = await (await import('$lib/ocr/cloud')).hasCloudConfig();
+    })();
   });
 
   async function loadCategoriesNow() {
