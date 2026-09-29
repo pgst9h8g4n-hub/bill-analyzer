@@ -8,7 +8,7 @@
   import { currentUserId, currentLedgerId } from '$lib/session';
   import { createWorker, type Worker as TesseractWorker } from 'tesseract.js';
   import { get } from 'svelte/store';
-  import { ocrMode, ocrProvider, loadOCRConfig, hasCloudConfig, getTodayCloudQuota, isCloudQuotaNearlyExhausted } from '$lib/stores/ocr-config';
+  import { ocrMode, ocrProvider, loadConfig, hasCloudConfig, getTodayCloudQuota, isCloudQuotaNearlyExhausted } from '$lib/stores/ocr-config';
   import { callCloudOCR, type OCRConfig, getSmartModeConfig } from '$lib/ocr/cloud';
 
   let ocrAmount = '';
@@ -1121,8 +1121,13 @@
         <div class="flex items-center gap-2 mb-2">
           <span class="text-sm font-medium text-ink">云端 OCR</span>
           <span class="text-xs text-green-600 font-medium">已配置</span>
+          <span class="text-xs bg-clay-100 text-clay-700 px-2 py-0.5 rounded-full">{$ocrMode}</span>
         </div>
-        <p class="text-xs text-stone-400 mb-3">本地识别失败时自动使用云端 OCR（{$ocrProvider === 'baidu' ? '百度' : '腾讯云'}）</p>
+        <p class="text-xs text-stone-400 mb-3">
+          {$ocrMode === 'smart' ? '智能模式：优先使用云端 OCR（百度），额度耗尽自动降级本地' :
+           $ocrMode === 'cloud' ? '强制云端模式：始终使用云端 OCR' :
+           '本地识别失败时自动使用云端 OCR（百度）'}
+        </p>
         <a href="/settings#ocr" class="text-sm text-clay-600 font-medium hover:text-clay-700">配置 API Key →</a>
       </div>
       {:else}

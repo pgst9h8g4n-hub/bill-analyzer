@@ -3,7 +3,7 @@
   import { goto } from '$app/navigation';
   import { changePassword, deleteUser, clearSession } from '$lib/stores/auth';
   import { currentUserId, currentUsername } from '$lib/session';
-  import { ocrMode, ocrProvider, loadOCRConfig, saveConfig, clearConfig } from '$lib/stores/ocr-config';
+  import { ocrMode, ocrProvider, loadConfig, saveConfig, clearConfig, setMode } from '$lib/stores/ocr-config';
   import { getOCRConfig } from '$lib/ocr/cloud';
 
   $: userId = $currentUserId;
@@ -83,7 +83,7 @@
         secretKey
       });
       // 同步模式到 store
-      ocrMode.set(ocrModeValue as 'local' | 'cloud' | 'auto' | 'smart');
+      setMode(ocrModeValue as 'local' | 'cloud' | 'auto' | 'smart');
       hasConfig = true;
       ocrMsg = '✅ 配置保存成功！';
       // 更新 OCR 页面状态
