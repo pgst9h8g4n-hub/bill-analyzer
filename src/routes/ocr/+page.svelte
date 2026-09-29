@@ -8,8 +8,8 @@
   import { currentUserId, currentLedgerId } from '$lib/session';
   import { createWorker, type Worker as TesseractWorker } from 'tesseract.js';
   import { get } from 'svelte/store';
-  import { ocrMode, ocrProvider, loadOCRConfig } from '$lib/stores/ocr-config';
-  import { callCloudOCR, type OCRConfig } from '$lib/ocr/cloud';
+  import { ocrMode, ocrProvider, loadOCRConfig, hasCloudConfig, getTodayCloudQuota, isCloudQuotaNearlyExhausted } from '$lib/stores/ocr-config';
+  import { callCloudOCR, type OCRConfig, getSmartModeConfig } from '$lib/ocr/cloud';
 
   let ocrAmount = '';
   let ocrTime = new Date().toISOString().slice(0, 16);
@@ -566,7 +566,32 @@
     // 如果本地 OCR 没识别到金额，尝试云端 OCR
     const localClassified = collectClassifiedAmounts(fullText || '');
     const hasLocalAmount = localClassified.paid.length > 0 || localClassified.fulltextBig.length > 0;
-    const useCloud = !hasLocalAmount && cloudHasConfig && ($ocrMode === 'cloud' || $ocrMode === 'auto');
+
+    // 智能判断是否使用云端：smart 模式下检查额度 + 配置
+    let useCloud = false;
+    if (!hasLocalAmount && cloudHasConfig) {
+      const currentMode = $ocrMode;
+      const smartConfig = await getSmartModeConfig();
+      const quota = await getTodayCloudQuota();
+      const quotaNearlyExhausted = await isCloudQuotaNearlyExhausted();
+
+      if (currentMode === 'cloud') {
+        useCloud = true;
+      } else if (currentMode === 'auto') {
+        useCloud = !hasLocalAmount;
+      } else if (currentMode === 'smart') {
+        // 智能模式：云端优先，额度耗尽或失败后降级本地
+        if (smartConfig.cloudFirst) {
+          if (quota.count < 100 && !quotaNearlyExhausted) {
+            useCloud = true; // 有额度，使用云端
+          } else {
+            useCloud = false; // 额度不足，降级本地
+          }
+        }
+      }
+    }
+
+    console.log('[OCR] useCloud=', useCloud, 'mode=', $ocrMode, 'quota=', await getTodayCloudQuota());
 
     if (useCloud) {
       try {

@@ -177,7 +177,11 @@
             <option value="auto">自动（本地优先，失败时云端）</option>
             <option value="local">仅本地</option>
             <option value="cloud">仅云端</option>
+            <option value="smart">智能切换（云端优先，额度耗尽自动降级本地）</option>
           </select>
+          <p class="text-xs text-stone-400 mt-1">
+            {ocrModeValue === 'smart' ? '每日云端调用约 500 次免费，额度用完后自动切换本地 OCR' : ''}
+          </p>
         </div>
         <div>
           <label class="block text-sm font-medium text-ink mb-1.5">提供商</label>

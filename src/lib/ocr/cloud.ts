@@ -5,7 +5,7 @@
  */
 
 export type OCRProvider = 'baidu' | 'tencent';
-export type OCRMode = 'local' | 'cloud' | 'auto';
+export type OCRMode = 'local' | 'cloud' | 'auto' | 'smart';
 
 export interface OCRConfig {
   provider: OCRProvider;
@@ -17,6 +17,31 @@ export interface OCRResult {
   text: string;
   confidence: number;
   provider: OCRProvider;
+}
+
+// 智能模式配置：云端优先，额度耗尽后自动降级
+export interface SmartModeConfig {
+  cloudFirst: boolean;  // 是否优先使用云端
+  cloudFailLocal: boolean;  // 云端失败是否降级本地
+  localFailCloud: boolean;  // 本地失败是否尝试云端
+  maxCloudAttempts: number;  // 最大云端尝试次数（防止频繁请求）
+  quotaKey: string;  // 用于本地追踪调用次数的 key
+}
+
+// 默认智能模式配置
+export const DEFAULT_SMART_CONFIG: SmartModeConfig = {
+  cloudFirst: true,
+  cloudFailLocal: true,
+  localFailCloud: false,  // 云端有额度时不降级
+  maxCloudAttempts: 10,  // 每天最多尝试 10 次云端（防止配额浪费）
+  quotaKey: 'xiaoliuji_cloud_quota',
+};
+
+// 本地存储的配额信息
+interface QuotaInfo {
+  date: string;  // YYYY-MM-DD
+  count: number;
+  lastError?: string;
 }
 
 // 从 IndexedDB 获取 OCR 配置
@@ -40,6 +65,92 @@ export async function saveOCRConfig(config: OCRConfig): Promise<void> {
     key: 'ocr_config',
     value: JSON.stringify(config)
   });
+}
+
+// 获取智能模式配置
+export async function getSmartModeConfig(): Promise<SmartModeConfig> {
+  const { db } = await import('$lib/db');
+  const stored = await db.settings.get('ocr_smart_config');
+  if (stored?.value) {
+    try {
+      return JSON.parse(stored.value) as SmartModeConfig;
+    } catch {
+      return DEFAULT_SMART_CONFIG;
+    }
+  }
+  return DEFAULT_SMART_CONFIG;
+}
+
+// 保存智能模式配置
+export async function saveSmartModeConfig(config: SmartModeConfig): Promise<void> {
+  const { db } = await import('$lib/db');
+  await db.settings.put({
+    key: 'ocr_smart_config',
+    value: JSON.stringify(config)
+  });
+}
+
+// 获取今日云端调用次数
+export async function getTodayCloudQuota(): Promise<QuotaInfo> {
+  const { db } = await import('$lib/db');
+  const today = new Date().toISOString().slice(0, 10);
+  const stored = await db.settings.get('ocr_cloud_quota');
+  if (stored?.value) {
+    try {
+      const quota: QuotaInfo = JSON.parse(stored.value);
+      // 如果是今天的记录，返回；否则重置
+      if (quota.date === today) {
+        return quota;
+      }
+    } catch {}
+  }
+  return { date: today, count: 0 };
+}
+
+// 增加今日云端调用计数
+export async function incrementCloudQuota(error?: string): Promise<void> {
+  const { db } = await import('$lib/db');
+  const today = new Date().toISOString().slice(0, 10);
+  let quota = await getTodayCloudQuota();
+  quota.count++;
+  if (error) quota.lastError = error;
+  await db.settings.put({
+    key: 'ocr_cloud_quota',
+    value: JSON.stringify(quota)
+  });
+}
+
+// 检查今日云端额度是否即将耗尽（超过 80%）
+export async function isCloudQuotaNearlyExhausted(maxDaily: number = 500): Promise<boolean> {
+  const quota = await getTodayCloudQuota();
+  return quota.count >= maxDaily * 0.8;
+}
+
+// 获取云端错误状态（用于判断是否触发降级）
+export async function getCloudErrorStatus(): Promise<{ failed: boolean; lastError?: string }> {
+  const { db } = await import('$lib/db');
+  const stored = await db.settings.get('ocr_cloud_error');
+  if (stored?.value) {
+    try {
+      return JSON.parse(stored.value) as { failed: boolean; lastError?: string };
+    } catch {}
+  }
+  return { failed: false };
+}
+
+// 保存云端错误状态
+export async function saveCloudError(error: string): Promise<void> {
+  const { db } = await import('$lib/db');
+  await db.settings.put({
+    key: 'ocr_cloud_error',
+    value: JSON.stringify({ failed: true, lastError: error, timestamp: Date.now() })
+  });
+}
+
+// 清除云端错误状态
+export async function clearCloudError(): Promise<void> {
+  const { db } = await import('$lib/db');
+  await db.settings.delete('ocr_cloud_error');
 }
 
 // 百度 OCR API
