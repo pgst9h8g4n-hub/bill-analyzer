@@ -1076,6 +1076,27 @@
         {/if}
       </div>
 
+      <!-- 云端 OCR 配置入口 -->
+      {#if cloudHasConfig}
+      <div class="bg-white rounded-2xl shadow-card p-4">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-sm font-medium text-ink">云端 OCR</span>
+          <span class="text-xs text-green-600 font-medium">已配置</span>
+        </div>
+        <p class="text-xs text-stone-400 mb-3">本地识别失败时自动使用云端 OCR（{ocrProvider === 'baidu' ? '百度' : '腾讯云'}）</p>
+        <a href="/settings#ocr" class="text-sm text-clay-600 font-medium hover:text-clay-700">配置 API Key →</a>
+      </div>
+      {:else}
+      <div class="bg-white rounded-2xl shadow-card p-4">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-sm font-medium text-ink">云端 OCR</span>
+          <span class="text-xs text-stone-400">未配置</span>
+        </div>
+        <p class="text-xs text-stone-400 mb-3">配置后可在本地识别失败时自动使用云端 OCR</p>
+        <a href="/settings#ocr" class="text-sm text-clay-600 font-medium hover:text-clay-700">配置 API Key →</a>
+      </div>
+      {/if}
+
       <!-- 错误提示 -->
       {#if ocrError}
         <div class="bg-red-50 text-red-600 text-sm px-4 py-3 rounded-xl">{ocrError}</div>
