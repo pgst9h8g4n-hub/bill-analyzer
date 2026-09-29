@@ -33,9 +33,6 @@
   // 用 Svelte 响应式订阅代替手动 subscribe，确保 ledgerId 变化时自动加载分类
   $: userId = $currentUserId;
   $: ledgerId = $currentLedgerId;
-  $: if (ledgerId > 0) {
-    loadCategoriesNow();
-  }
 
   // 更精确的商户/分类关键词排序：长词优先、具体优先于泛化
   // 规则顺序：越具体的越靠前，支付平台/泛词放最后
@@ -823,9 +820,17 @@
   }
 
   onMount(() => {
-    // 首次加载（在 subscribe 之前先读一次当前值，防止 mount 时 ledgerId 已就绪但 subscribe 回调未触发）
-    const initialLedgerId = $currentLedgerId;
-    if (initialLedgerId > 0) loadCategoriesNow();
+    // 与 stats 页面一致：先读初始值，再订阅变化
+    const initLedgerId = $currentLedgerId;
+    if (initLedgerId > 0) ledgerId = initLedgerId;
+    currentLedgerId.subscribe(v => {
+      if (v !== ledgerId && v > 0) {
+        ledgerId = v;
+        loadCategoriesNow();
+      }
+    });
+    // 初始加载（在 subscribe 之前）
+    if (ledgerId > 0) loadCategoriesNow();
   });
 
   async function loadCategoriesNow() {
