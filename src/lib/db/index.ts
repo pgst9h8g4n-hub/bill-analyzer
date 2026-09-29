@@ -78,12 +78,15 @@ export class XiaoLiujiDB extends Dexie {
     });
 
     // v2: 加入账本系统，迁移旧数据
+    // 注意：必须声明全部 existing stores，否则 Dexie 会 drop 未列出的表
     this.version(2).stores({
+      users: '++id, username',
       ledgers: '++id, code',
       members: '[ledger_id+user_id], ledger_id, user_id',
       expenses: '++id, user_id, ledger_id, [user_id+paid_at], [ledger_id+paid_at], category_id, paid_at',
       categories: '++id, ledger_id, name, is_default',
-      budgets: '++id, [ledger_id+month], ledger_id, [user_id+month], user_id, month'
+      budgets: '++id, [ledger_id+month], ledger_id, [user_id+month], user_id, month',
+      settings: 'key'
     }).upgrade(async () => {
       const userList = await db.users.toArray();
       for (const user of userList) {
@@ -111,11 +114,13 @@ export class XiaoLiujiDB extends Dexie {
     // v3: 修复 active_ledger 设置（之前迁移时未保存）
     // 注意：必须重复声明全部 stores，否则 Dexie 会把未列出的表 drop 掉
     this.version(3).stores({
+      users: '++id, username',
       ledgers: '++id, code',
       members: '[ledger_id+user_id], ledger_id, user_id',
       expenses: '++id, user_id, ledger_id, [user_id+paid_at], [ledger_id+paid_at], category_id, paid_at',
       categories: '++id, ledger_id, name, is_default',
-      budgets: '++id, [ledger_id+month], ledger_id, [user_id+month], user_id, month'
+      budgets: '++id, [ledger_id+month], ledger_id, [user_id+month], user_id, month',
+      settings: 'key'
     }).upgrade(async () => {
       const settings = await db.settings.toArray();
       const hasActiveLedger = settings.some(s => s.key === 'active_ledger');
@@ -217,6 +222,49 @@ export class XiaoLiujiDB extends Dexie {
       const settings = await db.settings.toArray();
       if (!settings.some(s => s.key === 'active_ledger') && ledgers.length > 0) {
         await db.settings.put({ key: 'active_ledger', value: String(ledgers[0].id) });
+      }
+    });
+
+    // v6: 修复旧版本 Dexie 数据库 schema 损坏问题
+    // 强制重建所有表索引，清除损坏的 keyPath
+    this.version(6).stores({
+      users: '++id, username',
+      ledgers: '++id, code',
+      members: '[ledger_id+user_id], ledger_id, user_id',
+      expenses: '++id, user_id, ledger_id, [user_id+paid_at], [ledger_id+paid_at], category_id, paid_at',
+      categories: '++id, ledger_id, name, is_default',
+      budgets: '++id, [ledger_id+month], ledger_id, [user_id+month], user_id, month',
+      settings: 'key'
+    }).upgrade(async () => {
+      console.log('[DB Migration v6] Rebuilding schema to fix corrupted indexes');
+      const users = await db.users.toArray();
+      for (const user of users) {
+        let ledger = await db.ledgers.where('created_by').equals(user.id).first();
+        if (!ledger) {
+          // 内联创建账本（避免循环依赖）
+          const code = generateCode();
+          const id = await db.ledgers.add({
+            name: `${user.username}的账本`,
+            created_by: user.id,
+            code,
+            created_at: new Date().toISOString()
+          });
+          ledger = await db.ledgers.get(id);
+        }
+        if (ledger) {
+          await seedDefaultCategories(ledger.id);
+          const member = await db.members.where({ ledger_id: ledger.id, user_id: user.id }).first();
+          if (!member) {
+            await db.members.add({ ledger_id: ledger.id, user_id: user.id, role: 'admin', joined_at: new Date().toISOString() });
+          }
+        }
+      }
+      const settings = await db.settings.toArray();
+      if (!settings.some(s => s.key === 'active_ledger') && users.length > 0) {
+        const firstLedger = await db.ledgers.where('created_by').equals(users[0].id).first();
+        if (firstLedger) {
+          await db.settings.put({ key: 'active_ledger', value: String(firstLedger.id) });
+        }
       }
     });
   }
