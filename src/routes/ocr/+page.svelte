@@ -820,22 +820,31 @@
   }
 
   onMount(() => {
-    // 先读初始值
+    // 详细调试日志
+    console.log('[OCR] onMount called');
     const initUserId = get(currentUserId);
     const initLedgerId = get(currentLedgerId);
+    console.log('[OCR] Initial values: userId=', initUserId, 'ledgerId=', initLedgerId);
+
     if (initUserId > 0) userId = initUserId;
     if (initLedgerId > 0) {
       ledgerId = initLedgerId;
+      console.log('[OCR] Initial ledgerId > 0, calling loadCategoriesNow');
       loadCategoriesNow();
+    } else {
+      console.log('[OCR] Initial ledgerId is 0, waiting for subscription');
     }
 
     // 订阅变化
     currentUserId.subscribe(v => {
+      console.log('[OCR] currentUserId changed to', v);
       if (v !== userId) userId = v;
     });
     currentLedgerId.subscribe(v => {
+      console.log('[OCR] currentLedgerId changed to', v, 'current ledgerId=', ledgerId);
       if (v !== ledgerId && v > 0) {
         ledgerId = v;
+        console.log('[OCR] ledgerId updated, calling loadCategoriesNow');
         loadCategoriesNow();
       }
     });
