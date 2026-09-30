@@ -20,11 +20,11 @@
   let apiKey = '';
   let secretKey = '';
   let ocrMsg = '';
-  let ocrModeValue: 'local' | 'cloud' | 'auto' | 'smart' = 'auto';
+  let ocrModeValue: 'local' | 'cloud' | 'smart' = 'smart';
   let hasConfig = false;
 
   // 订阅 mode 变化，保持本地状态与 store 同步
-  ocrMode.subscribe(v => { ocrModeValue = v; })();
+  ocrMode.subscribe(v => { if (v !== 'auto') ocrModeValue = v; })();
   ocrProvider.subscribe(v => { ocrProviderName = v; })();
 
   onMount(async () => {
@@ -186,7 +186,6 @@
         <div>
           <label class="block text-sm font-medium text-ink mb-1.5">识别模式</label>
           <select bind:value={ocrModeValue} class="input-field">
-            <option value="auto">自动（本地优先，失败时云端）</option>
             <option value="local">仅本地</option>
             <option value="cloud">仅云端</option>
             <option value="smart">智能切换（云端优先，额度耗尽自动降级本地）</option>
