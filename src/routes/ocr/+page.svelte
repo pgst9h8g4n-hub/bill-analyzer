@@ -581,6 +581,7 @@
         const quotaNearlyExhausted = await (await import('$lib/ocr/cloud')).isCloudQuotaNearlyExhausted();
 
         if (smartConfig.cloudFirst && quota.count < 100 && !quotaNearlyExhausted) {
+          useCloud = true; // 智能模式：优先云端
           useCloud = true; // 有额度，优先云端
         }
       } else if (currentMode === 'auto') {
