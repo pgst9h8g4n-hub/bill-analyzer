@@ -13,6 +13,9 @@ export async function saveConfig(config: OCRConfig & { mode?: 'local' | 'cloud' 
   ocrProvider.set(config.provider);
   if (config.mode) {
     ocrMode.set(config.mode);
+    // 同时保存到 IndexedDB
+    const { db } = await import('$lib/db');
+    await db.settings.put({ key: 'ocr_mode', value: JSON.stringify(config.mode) });
   }
 }
 
@@ -20,6 +23,7 @@ export async function saveConfig(config: OCRConfig & { mode?: 'local' | 'cloud' 
 export async function clearConfig(): Promise<void> {
   const { db } = await import('$lib/db');
   await db.settings.delete('ocr_config');
+  await db.settings.delete('ocr_mode');
   ocrProvider.set('baidu');
   ocrMode.set('auto');
 }
@@ -39,7 +43,9 @@ export async function loadConfig(): Promise<{ config: OCRConfig | null; mode: 'l
       ocrMode.set(mode);
     } catch {}
   }
-  const currentMode = ocrMode;
+  // 返回当前模式值
+  let currentMode: 'local' | 'cloud' | 'auto' | 'smart' = 'auto';
+  ocrMode.subscribe(v => { currentMode = v; })();
   return { config, mode: currentMode };
 }
 

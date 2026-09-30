@@ -20,7 +20,7 @@
   let apiKey = '';
   let secretKey = '';
   let ocrMsg = '';
-  let ocrModeValue = 'auto';
+  let ocrModeValue: 'local' | 'cloud' | 'auto' | 'smart' = 'auto';
   let hasConfig = false;
 
   // 订阅 mode 变化，保持本地状态与 store 同步
@@ -34,6 +34,14 @@
       apiKey = config.apiKey;
       secretKey = config.secretKey;
       hasConfig = true;
+    }
+    // Load saved mode from IndexedDB
+    const modeStored = await (await import('$lib/db')).db.settings.get('ocr_mode');
+    if (modeStored?.value) {
+      try {
+        ocrModeValue = JSON.parse(modeStored.value);
+        ocrMode.set(ocrModeValue);
+      } catch {}
     }
   });
 
