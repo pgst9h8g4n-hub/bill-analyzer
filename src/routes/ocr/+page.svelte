@@ -575,14 +575,13 @@
       if (currentMode === 'cloud') {
         useCloud = true; // 强制云端
       } else if (currentMode === 'smart') {
-        // 智能模式：云端优先，但本地成功时不强制覆盖
+        // 智能模式：云端优先，额度耗尽自动降级本地
         const smartConfig = await (await import('$lib/ocr/cloud')).getSmartModeConfig();
         const quota = await (await import('$lib/ocr/cloud')).getTodayCloudQuota();
         const quotaNearlyExhausted = await (await import('$lib/ocr/cloud')).isCloudQuotaNearlyExhausted();
 
         if (smartConfig.cloudFirst && quota.count < 100 && !quotaNearlyExhausted) {
           useCloud = true; // 智能模式：优先云端
-          useCloud = true; // 有额度，优先云端
         }
       } else if (currentMode === 'auto') {
         useCloud = !hasLocalAmount; // 自动：本地失败时才用云端

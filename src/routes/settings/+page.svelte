@@ -85,7 +85,7 @@
       return;
     }
     try {
-      await saveConfig({
+      await saveConfig({mode: ocrModeValue,
         provider: ocrProviderName as 'baidu' | 'tencent',
         apiKey,
         secretKey
