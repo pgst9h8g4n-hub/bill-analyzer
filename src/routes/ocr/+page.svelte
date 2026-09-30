@@ -919,9 +919,12 @@
     reader.readAsDataURL(file);
   }
 
-  onMount(() => {
+  onMount(async () => {
+    // 加载保存的 OCR 配置（包括模式）
+    await loadConfig();
+    
     // 详细调试日志
-    console.log('[OCR] onMount called');
+    console.log('[OCR] onMount called, mode=', $ocrMode);
     const initUserId = get(currentUserId);
     const initLedgerId = get(currentLedgerId);
     console.log('[OCR] Initial values: userId=', initUserId, 'ledgerId=', initLedgerId);
