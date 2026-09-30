@@ -24,35 +24,56 @@ export const POST: RequestHandler = async ({ request }) => {
         return json({ error: 'Token 获取失败', details: tokenData.error_description || tokenData.error }, { status: 400 });
       }
 
-      // 调用 OCR API
+      // 调用 OCR API（带重试，应对偶发网络超时）
       const ocrUrl = `https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic?access_token=${accessToken}`;
       console.log('[API /ocr] Calling OCR API');
-      
-      const resp = await fetch(ocrUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `image=${encodeURIComponent(imageBase64)}`
-      });
 
-      const data = await resp.json();
-      console.log('[API /ocr] OCR response:', JSON.stringify(data).substring(0, 500));
+      let data: any;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const resp = await fetch(ocrUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `image=${encodeURIComponent(imageBase64)}`,
+            signal: AbortSignal.timeout(15000) // 15s 超时
+          });
+          data = await resp.json();
+          break;
+        } catch (netErr) {
+          if (attempt === 0) {
+            console.warn('[API /ocr] 网络超时，重试中...');
+            await new Promise(r => setTimeout(r, 2000));
+            continue;
+          }
+          throw netErr;
+        }
+      }
+      console.log('[API /ocr] OCR response:', JSON.stringify(data).substring(0, 800));
 
       if (data.error_code) {
         console.error('[API /ocr] OCR错误:', data.error_code, data.error_msg);
-        return json({ error: 'OCR 失败', details: `${data.error_code}: ${data.error_msg}` }, { status: 400 });
-      }
-      
-      if (!data.result || !Array.isArray(data.result)) {
-        console.error('[API /ocr] 返回格式错误:', data);
-        return json({ error: 'OCR 返回格式错误', details: 'result 字段不存在或不是数组' }, { status: 500 });
+        // 百度额度/频率类错误码（17/18/19/23）→ 标记 quotaExhausted
+        const isQuotaError = ['17','18','19','23'].includes(String(data.error_code));
+        return json({
+          error: 'OCR 失败',
+          details: `${data.error_code}: ${data.error_msg}`,
+          quotaExhausted: isQuotaError
+        }, { status: 400 });
       }
 
-      const text = data.result
+      // 百度 OCR 返回字段是 words_result（不是 result）
+      const wordsResult = data.words_result || data.result;
+      if (!Array.isArray(wordsResult)) {
+        console.error('[API /ocr] 返回缺少 words_result 字段:', JSON.stringify(data));
+        return json({ error: 'OCR 返回格式错误', details: `缺少 words_result，实际返回: ${JSON.stringify(data).substring(0,200)}` }, { status: 500 });
+      }
+
+      const text = wordsResult
         .map((item: { words: string }) => item.words)
         .join('\n');
 
-      const confidence = data.result.length > 0
-        ? data.result.reduce((sum: number, item: { confidence: number }) => sum + item.confidence, 0) / data.result.length
+      const confidence = wordsResult.length > 0
+        ? wordsResult.reduce((sum: number, item: { confidence?: number }) => sum + (item.confidence ?? 0), 0) / wordsResult.length
         : 0;
 
       console.log('[API /ocr] 成功识别，文本长度:', text.length, '置信度:', confidence);

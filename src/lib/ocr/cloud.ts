@@ -37,11 +37,18 @@ export const DEFAULT_SMART_CONFIG: SmartModeConfig = {
   quotaKey: 'xiaoliuji_cloud_quota',
 };
 
-// 本地存储的配额信息
+// 本地存储的配额信息（按自然月）
 interface QuotaInfo {
-  date: string;  // YYYY-MM-DD
+  period: string;  // YYYY-MM
   count: number;
   lastError?: string;
+  quotaExhausted?: boolean;  // 本月额度已耗尽（由百度实际报错触发）
+}
+
+// 获取当前自然月
+function currentPeriod(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 }
 
 // 从 IndexedDB 获取 OCR 配置
@@ -90,40 +97,73 @@ export async function saveSmartModeConfig(config: SmartModeConfig): Promise<void
   });
 }
 
-// 获取今日云端调用次数
+// 获取本自然月的云端调用次数
 export async function getTodayCloudQuota(): Promise<QuotaInfo> {
   const { db } = await import('$lib/db');
-  const today = new Date().toISOString().slice(0, 10);
+  const period = currentPeriod();
   const stored = await db.settings.get('ocr_cloud_quota');
   if (stored?.value) {
     try {
-      const quota: QuotaInfo = JSON.parse(stored.value);
-      // 如果是今天的记录，返回；否则重置
-      if (quota.date === today) {
-        return quota;
+      const raw = JSON.parse(stored.value);
+      // 新格式：有 period 字段
+      if (raw.period === period) {
+        return raw as QuotaInfo;
+      }
+      // 旧格式：有 date 字段（YYYY-MM-DD）→ 迁移
+      if (raw.date && raw.count !== undefined) {
+        const migrated: QuotaInfo = {
+          period,
+          count: raw.count,
+          lastError: raw.lastError,
+          quotaExhausted: false
+        };
+        await db.settings.put({ key: 'ocr_cloud_quota', value: JSON.stringify(migrated) });
+        return migrated;
       }
     } catch {}
   }
-  return { date: today, count: 0 };
+  return { period, count: 0, quotaExhausted: false };
 }
 
-// 增加今日云端调用计数
+// 增加本自然月云端调用计数
 export async function incrementCloudQuota(error?: string): Promise<void> {
   const { db } = await import('$lib/db');
-  const today = new Date().toISOString().slice(0, 10);
   let quota = await getTodayCloudQuota();
   quota.count++;
   if (error) quota.lastError = error;
+  // 百度 error_code 17/18/19/23 = 额度/频率问题
+  const quotaCodes = ['17', '18', '19', '23'];
+  if (error && quotaCodes.some(c => error.includes(c))) {
+    quota.quotaExhausted = true;
+  }
   await db.settings.put({
     key: 'ocr_cloud_quota',
     value: JSON.stringify(quota)
   });
 }
 
-// 检查今日云端额度是否即将耗尽（超过 80%）
-export async function isCloudQuotaNearlyExhausted(maxDaily: number = 500): Promise<boolean> {
+// 标记本月额度已耗尽（由百度实际报错触发）
+export async function markQuotaExhausted(): Promise<void> {
+  const { db } = await import('$lib/db');
+  let quota = await getTodayCloudQuota();
+  quota.quotaExhausted = true;
+  await db.settings.put({
+    key: 'ocr_cloud_quota',
+    value: JSON.stringify(quota)
+  });
+}
+
+// 检查本自然月云端额度是否即将耗尽（超过 80% 或已被标记耗尽）
+export async function isCloudQuotaNearlyExhausted(maxMonthly: number = 1000): Promise<boolean> {
   const quota = await getTodayCloudQuota();
-  return quota.count >= maxDaily * 0.8;
+  if (quota.quotaExhausted) return true;
+  return quota.count >= maxMonthly * 0.8;
+}
+
+// 本月额度是否已耗尽
+export async function isCloudQuotaExhausted(): Promise<boolean> {
+  const quota = await getTodayCloudQuota();
+  return !!quota.quotaExhausted;
 }
 
 // 获取云端错误状态（用于判断是否触发降级）
@@ -153,95 +193,32 @@ export async function clearCloudError(): Promise<void> {
   await db.settings.delete('ocr_cloud_error');
 }
 
-// 百度 OCR API
-async function callBaiduOCR(imageBase64: string, apiKey: string, secretKey: string): Promise<OCRResult> {
-  // 获取 access token
-  const tokenResp = await fetch(
-    `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${apiKey}&client_secret=${secretKey}`
-  );
-  const tokenData = await tokenResp.json();
-  const accessToken = tokenData.access_token;
-
-  if (!accessToken) {
-    throw new Error('百度 OCR Token 获取失败');
-  }
-
-  // 调用 OCR API
-  const resp = await fetch(
-    `https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic?access_token=${accessToken}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `image=${encodeURIComponent(imageBase64)}`
-    }
-  );
-
-  const data = await resp.json();
-  if (data.error_code) {
-    throw new Error(`百度 OCR 错误: ${data.error_msg}`);
-  }
-
-  const text = data.result
-    .map((item: { words: string }) => item.words)
-    .join('\n');
-
-  return {
-    text,
-    confidence: data.result.reduce((sum: number, item: { confidence: number }) => sum + item.confidence, 0) / data.result.length,
-    provider: 'baidu'
-  };
-}
-
-// 腾讯云 OCR API
-async function callTencentOCR(imageBase64: string, apiKey: string, secretKey: string): Promise<OCRResult> {
-  // 腾讯云 OCR 需要签名，这里简化处理（实际项目需要 HMAC-SHA256 签名）
-  // 使用通用 OCR API
-  const timestamp = Math.floor(Date.now() / 1000);
-  const nonce = Math.random().toString(36).substring(2);
-
-  const resp = await fetch('https://ocr.tencentcloudapi.com/', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-TC-Action': 'GeneralBasicOCR',
-      'X-TC-Version': '2018-11-19',
-      'X-TC-Region': 'ap-beijing',
-      'X-TC-Timestamp': timestamp.toString(),
-      'X-TC-Nonce': nonce,
-      'Authorization': `TC3-HMAC-SHA256 Credential=${apiKey}/${timestamp}/ocr/tc3_request_hex` // 简化签名
-    },
-    body: JSON.stringify({
-      ImageUrl: `data:image/png;base64,${imageBase64}`
-    })
-  });
-
-  const data = await resp.json();
-  if (data.Response?.Error) {
-    throw new Error(`腾讯云 OCR 错误: ${data.Response.Error.Message}`);
-  }
-
-  const text = data.Response?.TextDetections
-    ?.map((item: { DetectedText: string }) => item.DetectedText)
-    .join('\n') || '';
-
-  return {
-    text,
-    confidence: 0.9, // 腾讯 API 不直接返回置信度
-    provider: 'tencent'
-  };
-}
-
-// 统一调用入口
+// 统一调用入口：始终走 /api/ocr 服务端代理（SvelteKit server route），
+// 避免浏览器直接跨域请求 aip.baidubce.com 被 CORS 拦截。
 export async function callCloudOCR(
   imageBase64: string,
   config: OCRConfig
 ): Promise<OCRResult> {
-  if (config.provider === 'baidu') {
-    return callBaiduOCR(imageBase64, config.apiKey, config.secretKey);
-  } else if (config.provider === 'tencent') {
-    return callTencentOCR(imageBase64, config.apiKey, config.secretKey);
+  const resp = await fetch('/api/ocr', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider: config.provider,
+      apiKey: config.apiKey,
+      secretKey: config.secretKey,
+      imageBase64
+    })
+  });
+
+  const data = await resp.json();
+  if (data.error) {
+    throw new Error(data.details || data.error);
   }
-  throw new Error('不支持的 OCR 提供商');
+  return {
+    text: data.text,
+    confidence: data.confidence ?? 0,
+    provider: config.provider
+  };
 }
 
 // 检查是否有云端配置
