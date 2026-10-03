@@ -1,11 +1,15 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
+// 百度 OCR 版本白名单
+const VALID_VERSIONS = new Set(['accurate_basic', 'general_basic']);
+
 export const POST: RequestHandler = async ({ request }) => {
   const body = await request.json();
-  const { provider, apiKey, secretKey, imageBase64 } = body;
+  const { provider, apiKey, secretKey, imageBase64, version: rawVersion } = body;
+  const version = VALID_VERSIONS.has(rawVersion) ? rawVersion : 'accurate_basic';
 
-  console.log('[API /ocr] Provider:', provider, 'API Key:', apiKey?.substring(0, 8) + '...');
+  console.log('[API /ocr] Provider:', provider, 'Version:', version, 'API Key:', apiKey?.substring(0, 8) + '...');
 
   try {
     if (provider === 'baidu') {
@@ -25,7 +29,7 @@ export const POST: RequestHandler = async ({ request }) => {
       }
 
       // 调用 OCR API（带重试，应对偶发网络超时）
-      const ocrUrl = `https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic?access_token=${accessToken}`;
+      const ocrUrl = `https://aip.baidubce.com/rest/2.0/ocr/v1/${version}?access_token=${accessToken}`;
       console.log('[API /ocr] Calling OCR API');
 
       let data: any;

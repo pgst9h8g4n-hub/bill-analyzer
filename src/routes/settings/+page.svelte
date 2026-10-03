@@ -4,7 +4,7 @@
   import { changePassword, deleteUser, clearSession } from '$lib/stores/auth';
   import { currentUserId, currentUsername } from '$lib/session';
   import { ocrMode, ocrProvider, loadConfig, saveConfig, clearConfig, setMode } from '$lib/stores/ocr-config';
-  import { getOCRConfig, getTodayCloudQuota } from '$lib/ocr/cloud';
+  import { getOCRConfig, getTodayCloudQuota, type DualQuota } from '$lib/ocr/cloud';
 
   $: userId = $currentUserId;
   $: username = $currentUsername;
@@ -22,7 +22,7 @@
   let ocrMsg = '';
   let ocrModeValue: 'local' | 'cloud' | 'smart' = 'smart';
   let hasConfig = false;
-  let todayQuota: { count: number; period: string; quotaExhausted?: boolean } = { count: 0, period: '', quotaExhausted: false };
+  let todayQuota: DualQuota = { period: '', accurate: { period: '', count: 0, quotaExhausted: false }, general: { period: '', count: 0, quotaExhausted: false } };
 
   // 订阅 mode 变化，保持本地状态与 store 同步
   ocrMode.subscribe(v => { if (v !== 'auto') ocrModeValue = v; })();
@@ -192,10 +192,10 @@
           <select bind:value={ocrModeValue} class="input-field">
             <option value="local">仅本地</option>
             <option value="cloud">仅云端</option>
-            <option value="smart">智能切换（云端优先，额度耗尽自动降级本地）</option>
+            <option value="smart">智能切换（高精度版 → 标准版 → 本地）</option>
           </select>
           <p class="text-xs text-stone-400 mt-1">
-            {ocrModeValue === 'smart' ? '每月云端调用约 1000 次免费，额度用完后自动切换本地 OCR' : ''}
+            {ocrModeValue === 'smart' ? '优先高精度版，额度耗尽自动降级标准版，再耗尽降级本地 OCR' : ''}
           </p>
         </div>
         <div>
@@ -211,23 +211,39 @@
             </button>
           </div>
           <p class="text-xs text-stone-400 mt-1">
-            {ocrProviderName === 'baidu' ? '百度 OCR 免费 1000次/月' : '腾讯云 OCR 免费 500次/月'}
+            {ocrProviderName === 'baidu' ? '百度 OCR 高精度版 + 标准版各 1000次/月免费' : '腾讯云 OCR 免费 500次/月'}
           </p>
           {#if hasConfig && ocrProviderName === 'baidu'}
-            {@const pct = Math.min(100, Math.round(todayQuota.count / 1000 * 100))}
-            {@const remaining = 1000 - todayQuota.count}
-            <div class="mt-2">
-              <div class="flex items-center justify-between text-xs mb-1">
-                <span class="text-stone-500">本月额度</span>
-                <span class={todayQuota.quotaExhausted ? 'text-red-500 font-medium' : remaining <= 100 ? 'text-amber-600 font-medium' : 'text-stone-400'}>
-                  {todayQuota.quotaExhausted ? '已耗尽' : `${todayQuota.count} / 1000 次${remaining <= 100 ? ' ⚠️ 即将用尽' : ''}`}
-                </span>
+            {@const accRemaining = 1000 - todayQuota.accurate.count}
+            {@const genRemaining = 1000 - todayQuota.general.count}
+            <div class="mt-2 space-y-2.5">
+              <!-- 高精度版 -->
+              <div>
+                <div class="flex items-center justify-between text-xs mb-0.5">
+                  <span class="text-stone-500">高精度版</span>
+                  <span class={todayQuota.accurate.quotaExhausted ? 'text-red-500 font-medium' : accRemaining <= 100 ? 'text-amber-600 font-medium' : 'text-stone-400'}>
+                    {todayQuota.accurate.quotaExhausted ? '已耗尽' : `${todayQuota.accurate.count} / 1000 次${accRemaining <= 100 ? ' ⚠️ 即将用尽' : ''}`}
+                  </span>
+                </div>
+                <div class="w-full h-1.5 bg-stone-100 rounded-full overflow-hidden">
+                  <div class="h-full rounded-full transition-all duration-300 {todayQuota.accurate.quotaExhausted ? 'bg-red-400' : accRemaining <= 100 ? 'bg-amber-400' : 'bg-clay-500'}"
+                       style="width:{todayQuota.accurate.quotaExhausted ? 100 : Math.min(100, Math.round(todayQuota.accurate.count / 1000 * 100))}%"></div>
+                </div>
               </div>
-              <div class="w-full h-1.5 bg-stone-100 rounded-full overflow-hidden">
-                <div class="h-full rounded-full transition-all duration-300 {todayQuota.quotaExhausted ? 'bg-red-400' : remaining <= 100 ? 'bg-amber-400' : 'bg-clay-500'}"
-                     style="width:{todayQuota.quotaExhausted ? 100 : pct}%"></div>
+              <!-- 标准版 -->
+              <div>
+                <div class="flex items-center justify-between text-xs mb-0.5">
+                  <span class="text-stone-500">标准版</span>
+                  <span class={todayQuota.general.quotaExhausted ? 'text-red-500 font-medium' : genRemaining <= 100 ? 'text-amber-600 font-medium' : 'text-stone-400'}>
+                    {todayQuota.general.quotaExhausted ? '已耗尽' : `${todayQuota.general.count} / 1000 次${genRemaining <= 100 ? ' ⚠️ 即将用尽' : ''}`}
+                  </span>
+                </div>
+                <div class="w-full h-1.5 bg-stone-100 rounded-full overflow-hidden">
+                  <div class="h-full rounded-full transition-all duration-300 {todayQuota.general.quotaExhausted ? 'bg-red-400' : genRemaining <= 100 ? 'bg-amber-400' : 'bg-clay-500'}"
+                       style="width:{todayQuota.general.quotaExhausted ? 100 : Math.min(100, Math.round(todayQuota.general.count / 1000 * 100))}%"></div>
+                </div>
               </div>
-              <p class="text-xs text-stone-400 mt-1">
+              <p class="text-xs text-stone-400">
                 本地计数仅供参考，实际额度以
                 <a href="https://console.bce.baidu.com/ai/#/ai/ocr/qualification" target="_blank"
                    class="text-clay-600 hover:underline">百度控制台</a>为准

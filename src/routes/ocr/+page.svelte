@@ -9,7 +9,7 @@
   import { createWorker, type Worker as TesseractWorker } from 'tesseract.js';
   import { get } from 'svelte/store';
   import { ocrMode, ocrProvider, loadConfig, hasCloudConfig, getTodayCloudQuota, isCloudQuotaNearlyExhausted } from '$lib/stores/ocr-config';
-  import { callCloudOCR, type OCRConfig, getSmartModeConfig } from '$lib/ocr/cloud';
+  import { callCloudOCR, runCloudOCRCascade, type OCRConfig, type DualQuota, getSmartModeConfig } from '$lib/ocr/cloud';
 
   let ocrAmount = '';
   let ocrTime = new Date().toISOString().slice(0, 16);
@@ -22,8 +22,11 @@
   let success = false;
   let successCount = 0; // 批量成功记录数
   let batchAllDone = false;
-  // 云端额度剩余次数（响应式）
-  $: cloudQuotaRemaining = 1000 - cloudQuota.count;
+  // 云端额度（双版本）
+  let cloudQuota: DualQuota = { period: '', accurate: { period: '', count: 0, quotaExhausted: false }, general: { period: '', count: 0, quotaExhausted: false } };
+  // 响应式剩余次数
+  $: cloudAccurateRemaining = 1000 - cloudQuota.accurate.count;
+  $: cloudGeneralRemaining = 1000 - cloudQuota.general.count;
   let errorMsg = '';
   let ocrProgress = 0;
   let ocrRunning = false;
@@ -32,7 +35,6 @@
   let cloudOCRInProgress = false;
   let cloudOCRError = '';
   let cloudHasConfig = false;
-  let cloudQuota: { count: number; period: string; quotaExhausted?: boolean } = { count: 0, period: '', quotaExhausted: false };
   let categories: Category[] = [];
   let selectedImage: string | null = null;
   let cameraInput: HTMLInputElement | undefined;
@@ -52,9 +54,41 @@
     ocrBusy: boolean;
     categoryOptions: Category[];
     saved: boolean;
+    // 识别状态：ok = 金额+商户都识别到；partial = 只有部分字段；failed = 基本没识别到
+    ocrStatus: 'ok' | 'partial' | 'failed';
+    expandRaw: boolean;
+    // 识别建议值（用于"一键应用修正"）
+    suggestAmount: string;
+    suggestMerchant: string;
+    suggestTime: string;
   }
   let batchItems: BatchItem[] = [];
   let batchBusy = false;
+
+  // 识别填充 item.amount/merchant/time 后，直接写对应 DOM input 的 .value。
+  // 用 setTimeout(0) 确保在 Svelte 完成本次 batchItems=[...] 重渲染之后执行，避免被重置。
+  // 识别填充 item.amount/merchant/time 后，直接写对应 DOM input 的 .value。
+  // Svelte 4 风格下 input 的 value 属性只在节点创建时设一次，之后嵌套属性变更
+  // 不会同步到 DOM。这里手动写 .value。三重保险：同步写一次 + 双 rAF 再写一次，
+  // 防止后续重渲染把 .value 重置回旧的初始值。
+  function writeInputs(item: BatchItem) {
+    const doWrite = () => {
+      const card = document.querySelector(`[data-item-id="${item.id}"]`);
+      if (!card) return;
+      const a = card.querySelector('input[data-field="amount"]') as HTMLInputElement | null;
+      const m = card.querySelector('input[data-field="merchant"]') as HTMLInputElement | null;
+      const t = card.querySelector('input[data-field="time"]') as HTMLInputElement | null;
+      if (a && a.value !== item.amount) a.value = item.amount;
+      if (m && m.value !== item.merchant) m.value = item.merchant;
+      if (t && t.value !== item.time) t.value = item.time;
+    };
+    doWrite(); // 同步写一次
+    requestAnimationFrame(() => requestAnimationFrame(doWrite)); // 两帧后再写，对抗重渲染重置
+  }
+
+  // ── 批量 OCR FIFO 队列（串行处理，避免 worker 竞态 + 云端并发） ──────
+  let ocrQueue: BatchItem[] = [];
+  let ocrQueueRunning = false;
 
   function triggerBatchSelect() { batchInput?.click(); }
 
@@ -77,23 +111,44 @@
           categoryId: 0,
           rawOcrText: '',
           ocrDone: false,
-          ocrBusy: false,
+          ocrBusy: true,   // 立即标记为"识别中"，避免在 runBatchItemOCR 跑起来前闪现"识别失败"
           categoryOptions: categories,
           saved: false,
+          ocrStatus: 'partial',  // 初始为 partial（等待识别），而非 failed
+          expandRaw: false,
+          suggestAmount: '',
+          suggestMerchant: '',
+          suggestTime: '',
         }];
-        // Auto-start OCR for each new item
+        // 入队，等待串行处理
         const item = batchItems[batchItems.length - 1];
-        if (item) runBatchItemOCR(item);
+        if (item) enqueueOCR(item);
       };
       reader.readAsDataURL(file);
     }
   }
 
+  function enqueueOCR(item: BatchItem) {
+    ocrQueue.push(item);
+    if (!ocrQueueRunning) pumpOCRQueue();
+  }
+
+  async function pumpOCRQueue() {
+    ocrQueueRunning = true;
+    while (ocrQueue.length > 0) {
+      const item = ocrQueue.shift()!;
+      await runBatchItemOCR(item);
+    }
+    ocrQueueRunning = false;
+  }
+
   async function runBatchItemOCR(item: BatchItem) {
     item.ocrBusy = true;
+    ocrError = ''; // 重置上一次识别（单张/批量）留下的错误状态，避免污染本次判断
     try {
       const fullText = await runOCRAndGetText(item.imageDataUrl);
       item.ocrText = fullText;
+      console.log('[BATCH OCR] 识别结果长度=', fullText.length, '前100字=', fullText.slice(0, 100));
       if (fullText) {
         const m = detectMerchant(fullText);
         if (m) item.merchant = m;
@@ -102,11 +157,49 @@
         const a = pickPaidAmount(collectClassifiedAmounts(fullText));
         if (a !== null) item.amount = String(a);
         item.rawOcrText = fullText;
+        console.log('[BATCH OCR] 解析结果: amount=', item.amount, 'merchant=', item.merchant, 'time=', item.time);
+
+        // 设置识别状态和建议值
+        const hasAmount = item.amount !== '';
+        const hasMerchant = item.merchant !== '';
+        if (hasAmount && hasMerchant) {
+          item.ocrStatus = 'ok';
+        } else if (hasAmount || hasMerchant) {
+          item.ocrStatus = 'partial';
+        } else {
+          item.ocrStatus = 'failed';
+          item.expandRaw = true; // 失败时自动展开原始文本
+        }
+
+        // 生成建议值（即使当前已有值，也存一份供"应用建议"按钮使用）
+        item.suggestAmount = item.amount;
+        item.suggestMerchant = item.merchant;
+        item.suggestTime = item.time;
+
+        // 金额可疑修正（.52/.58/.59 很可能是 .50）
+        if (item.amount) {
+          const corrected = correctAmountDigits(item.amount);
+          if (corrected !== item.amount) {
+            item.suggestAmount = corrected;
+          }
+        }
+      } else {
+        item.ocrStatus = 'failed';
+        item.expandRaw = true;
       }
+
       // Auto-pick category based on detected name
+      // 不阻塞识别结果展示：getCategories 失败/卡住也不影响金额/商户已填入
       const catName = detectCategoryName(fullText || '', item.merchant);
-      item.categoryOptions = await getCategories(ledgerId);
-      if (catName) {
+      // 分类加载加 3s 超时兜底，避免 IndexedDB 查询 pending 时卡死整个识别流程
+      const catTimeout: Promise<Category[]> = new Promise(resolve =>
+        setTimeout(() => resolve([]), 3000));
+      try {
+        item.categoryOptions = await Promise.race([getCategories(ledgerId), catTimeout]);
+      } catch {
+        item.categoryOptions = [];
+      }
+      if (catName && item.categoryOptions.length > 0) {
         const exact = item.categoryOptions.find(c => c.name === catName);
         if (exact) item.categoryId = exact.id;
         else {
@@ -115,57 +208,76 @@
         }
       }
       item.ocrDone = true;
+      // 重渲染后直接写 DOM .value，绕开 Svelte 嵌套属性不响应问题
+      batchItems = [...batchItems];
+      writeInputs(item);
     } catch {
       item.ocrDone = true;
+      item.ocrStatus = 'failed';
+      item.expandRaw = true;
+      batchItems = [...batchItems];
     } finally {
       item.ocrBusy = false;
     }
   }
 
+  function applySuggestion(item: BatchItem) {
+    if (item.suggestAmount) item.amount = item.suggestAmount;
+    if (item.suggestMerchant) item.merchant = item.suggestMerchant;
+    if (item.suggestTime) item.time = item.suggestTime;
+    // 更新状态
+    const hasAmount = item.amount !== '';
+    const hasMerchant = item.merchant !== '';
+    if (hasAmount && hasMerchant) item.ocrStatus = 'ok';
+    else if (hasAmount || hasMerchant) item.ocrStatus = 'partial';
+    batchItems = [...batchItems];
+    writeInputs(item);
+  }
+
   // runOCR without the progress/running state side-effects (batch mode)
   async function runOCRAndGetText(imageDataUrl: string): Promise<string> {
-    const img = await loadImage(imageDataUrl);
-    if (!img) return '';
-    // Use local Tesseract with PSM 4 and 11, pick the one with more amounts
-    ocrProgress = 0; // suppress progress bar for batch (it's hidden anyway)
-    const psmResults = await Promise.all([
-      runOCRWithPSM(imageDataUrl, 4).catch(() => ''),
-      runOCRWithPSM(imageDataUrl, 11).catch(() => ''),
-    ]);
+    // 本地 Tesseract（PSM4+PSM11）对小票识别率极低，仅作为兜底。
+    // 优先走云端级联（accurate → general），云端成功则完全覆盖本地结果。
+    ocrProgress = 0;
     const amountCount = (t: string) => (t.match(/\d+\.\d{2}/g) || []).length;
-    let fullText = psmResults[0] || psmResults[1] || '';
-    if (amountCount(psmResults[1]) > amountCount(psmResults[0])) fullText = psmResults[1];
+    let local = await runOCRWithPSM(imageDataUrl, 4).catch(() => '');
+    console.log('[BATCH OCR] PSM4 结果长度=', local.length, '前50字=', local.slice(0, 50));
+    if (amountCount(local) === 0) {
+      const psm11 = await runOCRWithPSM(imageDataUrl, 11).catch(() => '');
+      console.log('[BATCH OCR] PSM11 结果长度=', psm11.length, '前50字=', psm11.slice(0, 50));
+      if (amountCount(psm11) > amountCount(local)) local = psm11;
+    }
 
-    // Also try cloud if configured (batch: use cloud for all in smart mode)
-    if (cloudHasConfig && $ocrMode !== 'local') {
+    let bestText = local;
+
+    // 云端级联：成功则完全覆盖本地（云端准确率高得多）
+    if ($ocrMode !== 'local') {
       try {
-        const config = await (await import('$lib/ocr/cloud')).getOCRConfig();
-        if (config) {
-          const imageBase64 = imageDataUrl.split(',')[1];
-          const resp = await fetch('/api/ocr', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              provider: config.provider,
-              apiKey: config.apiKey,
-              secretKey: config.secretKey,
-              imageBase64,
-            }),
-          });
-          const data = await resp.json();
-          if (data.error) {
-            // Skip cloud error, fall through to local result
-          } else if (data.text) {
-            fullText = data.text;
-            const { incrementCloudQuota, getTodayCloudQuota } = await import('$lib/ocr/cloud');
-            await incrementCloudQuota();
-            cloudQuota = await getTodayCloudQuota();
+        const cloud = await import('$lib/ocr/cloud');
+        const hasConfig = await cloud.hasCloudConfig();
+        console.log('[BATCH OCR] hasCloudConfig=', hasConfig, 'ocrMode=', $ocrMode);
+        if (hasConfig) {
+          cloudHasConfig = hasConfig;
+          const config = await cloud.getOCRConfig();
+          if (config) {
+            const imageBase64 = imageDataUrl.split(',')[1];
+            const cloudText = await cloud.runCloudOCRCascade(imageBase64, config);
+            console.log('[BATCH OCR] 云端级联结果长度=', cloudText?.length ?? 'null', '前100字=', (cloudText||'').slice(0, 100));
+            if (cloudText) {
+              bestText = cloudText;  // 云端成功 → 完全用云端结果
+              cloudQuota = await cloud.getTodayCloudQuota();
+            }
+            // 云端失败（null）→ 保留本地结果（bestText 不变）
           }
         }
-      } catch { /* fall back to local */ }
+      } catch (e) {
+        console.error('[BATCH OCR] 云端级联异常:', e);
+        // 异常时保留本地结果
+      }
     }
+
     ocrProgress = 0;
-    return fullText;
+    return bestText;
   }
 
   function removeBatchItem(id: string) {
@@ -188,6 +300,7 @@
       isRefund: false,
     });
     item.saved = true;
+    batchItems = [...batchItems];
   }
 
   async function saveAllBatchItems() {
@@ -206,6 +319,10 @@
   }
   let previousOcrResult: string | null = null;
   let worker: TesseractWorker | null = null;
+  // worker 串行化锁：initWorker 会 terminate 旧 worker，
+  // 并发调用（如 PSM 4 + PSM 11 的 Promise.all）会互相杀掉对方的 worker，
+  // 导致 "Could not establish connection. Receiving end does not exist."
+  let workerLock = Promise.resolve();
   let debugText = '';
   const _OCR_DEBUG_PH = '粘贴OCR识别出的文字，然后点一键应用测试解析效果';
   let manualApply = false;
@@ -302,26 +419,33 @@
   ]);
 
   async function initWorker(psm = 4, whitelist = '') {
-    if (worker) { await worker.terminate(); worker = null; }
+    // worker 只创建一次，切换 PSM 用 setParameters 而不是 terminate+重建。
+    // 反复 terminate+createWorker 会互杀 worker（wasm 实例没释放），导致 recognize 永远 pending。
+    if (!worker) {
+      try {
+        worker = await createWorker('chi_sim+eng', 3, {
+          logger: (m) => {
+            if (m.status === 'recognizing text') {
+              ocrProgress = Math.round(m.progress * 100);
+            }
+          },
+          langPath: '/',
+          corePath: '/tesseract-core-lstm.wasm.js',
+        });
+      } catch (e: any) {
+        console.error('Worker init error:', e);
+        ocrError = 'OCR 库加载失败，请检查网络后重试';
+        return;
+      }
+    }
+    // 只设置 LSTM 模式支持的参数（PSM / whitelist），worker 实例复用
     try {
-      worker = await createWorker('chi_sim+eng', 3, {
-        logger: (m) => {
-          if (m.status === 'recognizing text') {
-            ocrProgress = Math.round(m.progress * 100);
-          }
-        },
-        langPath: '/',
-        corePath: '/tesseract-core-lstm.wasm.js',
-      });
-      // 只设置 LSTM 模式支持的参数
-      const params: Record<string, unknown> = {};
-      params['tessedit_pageseg_mode'] = psm as unknown as Tesseract.PSM;
+      const params: Record<string, unknown> = {
+        tessedit_pageseg_mode: psm as unknown as Tesseract.PSM,
+      };
       if (whitelist) params['tessedit_char_whitelist'] = whitelist;
       await worker.setParameters(params);
-    } catch (e: any) {
-      console.error('Worker init error:', e);
-      ocrError = 'OCR 库加载失败，请检查网络后重试';
-    }
+    } catch { /* setParameters 失败不影响 recognize */ }
   }
 
   // Parse a single number-whitelist OCR strip → clean numeric value (or null).
@@ -375,8 +499,8 @@
   // 实付/应付 = actually paid; 原价/订单金额/交易金额 = list price; 优惠/立减 = discount.
   // fulltextBig = ¥ 前缀的大字实付（页面最醒目的那个数，通常是实付）。
   // Handles thousands commas (2,390.63 → 2390.63).
-  function collectClassifiedAmounts(text: string): { paid: number[]; list: number[]; discount: number[]; bare: number[]; fulltextBig: number[] } {
-    const out = { paid: [] as number[], list: [] as number[], discount: [] as number[], bare: [] as number[], fulltextBig: [] as number[] };
+  function collectClassifiedAmounts(text: string): { paid: number[]; list: number[]; discount: number[]; bare: number[]; fulltextBig: number[]; negPaid: number[] } {
+    const out = { paid: [] as number[], list: [] as number[], discount: [] as number[], bare: [] as number[], fulltextBig: [] as number[], negPaid: [] as number[] };
     const valid = (v: number) => !isNaN(v) && v >= 0.01 && v <= 999999;
     const push = (arr: number[], m: RegExpExecArray | RegExpMatchArray, group: number) => {
       const v = parseFloat(m[group].replace(/,/g, ''));
@@ -401,10 +525,10 @@
       // ¥ 前缀金额 = 全页大字实付（最醒目那个数）
       out.fulltextBig.push(v);
     }
-    // 负号金额（−149.34）= 支出实付，最醒目
+    // 负号金额（−149.34）= 支出实付，最醒目 → 单独归 negPaid（最高优先级）
     for (const m of text.matchAll(/(?:^|\s)([−\-]\s*\d{1,3}(?:,\d{3})*\.?\d{0,2})\b(?!\s*元)/g)) {
       const v = Math.abs(parseFloat(m[1].replace(/[−\-\s]/g, '').replace(/,/g, '')));
-      if (valid(v)) out.fulltextBig.push(v);
+      if (valid(v)) out.negPaid.push(v);
     }
     // Standalone decimals WITH optional thousands comma (skip times), e.g. "2,390.63"
     // Also catch small decimals like "32.00" when preceded by non-digit context
@@ -425,12 +549,33 @@
       const v = parseFloat(m[1]);
       if (valid(v) && !out.bare.includes(v) && !out.fulltextBig.includes(v)) out.bare.push(v);
     }
+    // 跨行标签（原价/优惠 与 ¥ 金额被 OCR 拆成相邻两行）补进 list/discount 池
+    mergeCrossLineLabels(text, out);
     out.paid = [...new Set(out.paid)];
     out.list = [...new Set(out.list)];
     out.discount = [...new Set(out.discount)];
     out.bare = [...new Set(out.bare)];
     out.fulltextBig = [...new Set(out.fulltextBig)];
+    out.negPaid = [...new Set(out.negPaid)];
     return out;
+  }
+
+  // 跨行匹配：OCR 常把"原价"和"￥150.00"拆成相邻两行，逐行正则抓不到。
+  // 对整段文本找 原价/优惠 等标签后 60 字符内的 ¥ 金额，归入对应池（合并进 out）。
+  function mergeCrossLineLabels(text: string, out: { list: number[]; discount: number[] }) {
+    const valid = (v: number) => !isNaN(v) && v >= 0.01 && v <= 999999;
+    const amtNear = (label: RegExp, pool: number[]) => {
+      for (const m of text.matchAll(label)) {
+        const after = text.slice(m.index! + m[0].length, m.index! + m[0].length + 60);
+        const am = after.match(/[¥￥]\s*([\d,]+(?:\.\d{0,2})?)/);
+        if (am) {
+          const v = parseFloat(am[1].replace(/,/g, ''));
+          if (valid(v)) pool.push(v);
+        }
+      }
+    };
+    amtNear(/原价|零售价|门市价|建议价|市场价/g, out.list);
+    amtNear(/优惠|立减|减金|已享|已减/g, out.discount);
   }
 
   // Decide the actual paid amount.
@@ -443,10 +588,15 @@
   //   BEFORE crops are added to classified.bare. Used for the sanity guard only.
   //   This prevents crop pollution from bypassing the guard.
   function pickPaidAmount(
-    classified: { paid: number[]; list: number[]; discount: number[]; bare: number[]; fulltextBig: number[] },
+    classified: { paid: number[]; list: number[]; discount: number[]; bare: number[]; fulltextBig: number[]; negPaid: number[] },
     biggestCrop: number | null = null,
     cleanTextMax: number = 0
   ): number | null {
+    // 最高优先：带负号的大字金额（支付类截图里 "-149.34" 就是优惠后实付）
+    // 取 negPaid 里的最大值（若有多笔，最大那笔通常就是本单实付）
+    if (classified.negPaid.length > 0) {
+      return Math.max(...classified.negPaid);
+    }
     // Sanity guard: if biggestCrop is absurdly larger than clean text amounts, ignore it
     if (biggestCrop !== null) {
       const isReasonable = cleanTextMax === 0 || biggestCrop <= cleanTextMax * 10 || biggestCrop <= 999;
@@ -701,11 +851,19 @@
 
   // 多 PSM 尝试：不同分页模式对账单截图效果不同
   async function runOCRWithPSM(imageDataUrl: string, psm: number): Promise<string> {
-    await initWorker(psm);
-    if (ocrError) return '';
-    const processedUrl = await preprocessImage(imageDataUrl, 3);
-    const { data } = await worker!.recognize(processedUrl);
-    return data.text.trim();
+    // 串行化：init + preprocess + recognize 全程持有锁，
+    // 避免下一次 initWorker 的 terminate 杀掉正在 recognize 的 worker。
+    const prev = workerLock;
+    const next = prev.then(async () => {
+      await initWorker(psm);
+      if (ocrError) return '';
+      if (!worker) return '';
+      const processedUrl = await preprocessImage(imageDataUrl, 3);
+      const { data } = await worker!.recognize(processedUrl);
+      return data.text.trim();
+    }).catch(() => '');
+    workerLock = next.then(() => {}, () => {});
+    return await next;
   }
 
   async function runOCR(imageDataUrl: string) {
@@ -723,18 +881,14 @@
       return;
     }
 
-    // Step 1: Full-page OCR — 尝试多种 PSM，取最优结果
-    // PSM 4: 单列文本（适合账单）；PSM 11: 稀疏文本（适合复杂布局）
+    // Step 1: Full-page OCR — 串行 PSM（并发预处理会互杀 worker 导致 pending）
+    // PSM 4 单列文本（账单）；PSM 11 稀疏文本（复杂布局）。PSM4 有金额就不跑 PSM11。
     ocrProgress = 10;
-    const psmResults = await Promise.all([
-      runOCRWithPSM(imageDataUrl, 4).catch(() => ''),
-      runOCRWithPSM(imageDataUrl, 11).catch(() => ''),
-    ]);
-    // 选择包含更多有效金额的文本
-    let fullText = psmResults[0] || psmResults[1] || '';
     const amountCount = (t: string) => (t.match(/\d+\.\d{2}/g) || []).length;
-    if (amountCount(psmResults[1]) > amountCount(psmResults[0])) {
-      fullText = psmResults[1];
+    let fullText = await runOCRWithPSM(imageDataUrl, 4).catch(() => '');
+    if (amountCount(fullText) === 0) {
+      const psm11 = await runOCRWithPSM(imageDataUrl, 11).catch(() => '');
+      if (amountCount(psm11) > amountCount(fullText)) fullText = psm11;
     }
 
     // 智能判断是否使用云端：smart 模式下检查额度 + 配置
@@ -749,69 +903,42 @@
       if (currentMode === 'cloud') {
         useCloud = true; // 强制云端
       } else if (currentMode === 'smart') {
-        // 智能模式：云端优先，额度耗尽自动降级本地
-        const smartConfig = await (await import('$lib/ocr/cloud')).getSmartModeConfig();
-        const quota = await (await import('$lib/ocr/cloud')).getTodayCloudQuota();
-        const quotaNearlyExhausted = await (await import('$lib/ocr/cloud')).isCloudQuotaNearlyExhausted();
-
-        if (smartConfig.cloudFirst && quota.count < 100 && !quotaNearlyExhausted) {
-          useCloud = true; // 智能模式：优先云端
+        // 智能模式：高精度版优先，额度耗尽自动降级标准版，标准版也耗尽降级本地
+        const { getTodayCloudQuota, isCloudQuotaNearlyExhausted } = await import('$lib/ocr/cloud');
+        const dualQuota = await getTodayCloudQuota();
+        const accurateNearly = await isCloudQuotaNearlyExhausted('accurate_basic');
+        const generalNearly = await isCloudQuotaNearlyExhausted('general_basic');
+        // 只要高精度版或标准版任一还有额度就使用云端
+        if (!accurateNearly || !generalNearly) {
+          useCloud = true;
         }
       } else if (currentMode === 'auto') {
         useCloud = !hasLocalAmount; // 自动：本地失败时才用云端
       }
     }
 
-    console.log('[OCR] useCloud=', useCloud, 'mode=', currentMode, 'hasLocalAmount=', hasLocalAmount, 'quota=', await (await import('$lib/ocr/cloud')).getTodayCloudQuota());
+    console.log('[OCR] useCloud=', useCloud, 'mode=', currentMode, 'hasLocalAmount=', hasLocalAmount);
 
-    let cloudResult: { text?: string; provider?: string; confidence?: number } | null = null;
+    let cloudText = '';
     if (useCloud) {
       try {
         ocrProgress = 15;
         const config = await (await import('$lib/ocr/cloud')).getOCRConfig();
         if (config) {
           const imageBase64 = imageDataUrl.split(',')[1];
-          // 使用本地代理 API 避免 CORS 问题
-          const resp = await fetch('/api/ocr', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              provider: config.provider,
-              apiKey: config.apiKey,
-              secretKey: config.secretKey,
-              imageBase64
-            })
-          });
-          const data = await resp.json();
-          if (data.error) {
-            // 识别额度耗尽 → 标记并静默降级本地
-            if (data.quotaExhausted) {
-              const { markQuotaExhausted } = await import('$lib/ocr/cloud');
-              await markQuotaExhausted();
-              cloudQuota = await (await import('$lib/ocr/cloud')).getTodayCloudQuota();
-              cloudOCRError = '本月额度已用完，已切换本地识别';
-              console.log('[OCR] 额度耗尽，标记 quotaExhausted');
-              throw new Error('quota_exhausted');
-            }
-            throw new Error(data.details || data.error);
+          cloudText = await runCloudOCRCascade(imageBase64, config) ?? '';
+          cloudQuota = await (await import('$lib/ocr/cloud')).getTodayCloudQuota();
+          if (cloudText) {
+            fullText = cloudText;
+            console.log('[OCR] 云端级联识别成功');
+          } else {
+            cloudOCRError = '云端额度已用完或识别失败，已使用本地识别结果';
+            console.log('[OCR] 云端级联失败，降级本地');
           }
-          cloudResult = data;
-          fullText = data.text;
-          console.log('[OCR] 云端识别成功，provider:', data.provider, 'confidence:', data.confidence);
-          // 更新本月配额
-          const { incrementCloudQuota, getTodayCloudQuota } = await import('$lib/ocr/cloud');
-          await incrementCloudQuota();
-          cloudQuota = await getTodayCloudQuota();
         }
       } catch (e) {
-        const msg = (e as Error).message;
-        if (msg === 'quota_exhausted') {
-          // 额度耗尽已在上面标记，cloudOCRError 已设好，静默降级本地
-        } else {
-          cloudOCRError = '云端 OCR 失败: ' + msg;
-          console.error('[OCR] 云端 OCR 失败:', e);
-        }
-        // 继续用本地结果
+        cloudOCRError = '云端 OCR 失败: ' + (e as Error).message;
+        console.error('[OCR] 云端 OCR 失败:', e);
       }
     }
 
@@ -834,7 +961,7 @@
     // Step 3: 云端成功时直接用云端的金额结果（Tesseract 本地 crop 精度不如云端，不应覆盖）
     // 云端失败（catch 分支）时 fullText 保持本地结果，Step 3 正常跑本地 crop
     if (!ocrError) {
-      const cloudSucceeded = cloudResult?.text !== undefined && cloudResult !== null;
+      const cloudSucceeded = cloudText !== '';
       if (!cloudSucceeded) {
         // 本地 fallback：先算文本解析的干净最大值，供守卫使用
         const cleanTextMax = Math.max(
@@ -1318,48 +1445,88 @@
             </div>
           </div>
 
-          {#each batchItems as item, idx}
-            <div class="border rounded-xl overflow-hidden {item.saved ? 'border-green-200 bg-green-50/40' : 'border-stone-200'}">
+          {#each batchItems as item, idx (item.id)}
+            <div data-item-id={item.id} class="border rounded-xl overflow-hidden {item.saved ? 'border-green-200 bg-green-50/40' :
+              item.ocrStatus === 'failed' ? 'border-red-200 bg-red-50/30' :
+              item.ocrStatus === 'partial' ? 'border-amber-200 bg-amber-50/30' : 'border-stone-200'}">
               <div class="flex">
                 <div class="w-16 shrink-0 flex items-center justify-center bg-stone-100 p-2">
                   <img src={item.imageDataUrl} class="w-14 h-14 object-contain rounded" alt="" />
                 </div>
-                <div class="flex-1 min-w-0 p-3 space-y-1.5">
+                <div class="flex-1 min-w-0 p-3 space-y-2">
+                  <!-- 状态标签行 -->
                   <div class="flex items-center gap-2">
                     <span class="text-[10px] text-stone-400 font-mono">#{idx + 1}</span>
                     {#if item.saved}
                       <span class="text-[10px] text-green-600 font-medium">✅ 已入账</span>
                     {:else if item.ocrBusy}
-                      <span class="text-[10px] text-amber-600">识别中…</span>
-                    {:else if !item.amount}
-                      <button onclick={() => runBatchItemOCR(item)}
-                        class="text-[10px] text-clay-600 hover:underline">
-                        重新识别
-                      </button>
+                      <span class="text-[10px] text-amber-600 animate-pulse">🔍 识别中…</span>
+                    {:else if item.ocrStatus === 'failed'}
+                      <span class="text-[10px] text-red-500 font-medium">⚠️ 识别失败</span>
+                      <button onclick={() => enqueueOCR(item)}
+                        class="text-[10px] text-clay-600 hover:underline">重新识别</button>
+                    {:else if item.ocrStatus === 'partial'}
+                      <span class="text-[10px] text-amber-600 font-medium">⚡ 部分识别</span>
+                      <button onclick={() => applySuggestion(item)}
+                        class="text-[10px] text-clay-600 hover:underline">应用建议</button>
+                    {:else}
+                      <span class="text-[10px] text-green-600 font-medium">✅ 识别成功</span>
                     {/if}
                     <button onclick={() => removeBatchItem(item.id)}
                       class="ml-auto text-stone-300 hover:text-red-400 text-sm leading-none">✕</button>
                   </div>
-                  <div class="flex items-center gap-2">
-                    <input type="text" bind:value={item.amount}
-                      class="input-field !py-1.5 !px-2.5 text-sm font-mono font-semibold w-24" placeholder="金额" />
-                    <input type="text" bind:value={item.merchant}
-                      class="input-field !py-1.5 !px-2.5 text-sm flex-1" placeholder="商户" />
-                    <input type="datetime-local" bind:value={item.time}
-                      class="input-field !py-1.5 !px-2.5 text-xs w-[10.5rem]" />
+
+                  <!-- 建议值提示（partial 时显示） -->
+                  {#if item.ocrStatus === 'partial' && (item.suggestAmount !== item.amount || item.suggestMerchant !== item.merchant)}
+                    <div class="text-[11px] bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 text-amber-700">
+                      💡 建议：金额 {item.suggestAmount ? item.suggestAmount : item.amount} · 商户 {item.suggestMerchant || '—'} · 时间 {item.suggestTime ? item.suggestTime.replace('T',' ') : '—'}
+                      <button onclick={() => applySuggestion(item)} class="ml-1 underline text-amber-600">应用</button>
+                    </div>
+                  {/if}
+
+                  <!-- 金额/商户（第一行）+ 时间（第二行）：value 属性 + oninput 写回 item；
+                       识别完成后由 writeInputs() 直接写 DOM .value，绕开 Svelte 嵌套属性不响应问题。
+                       两行布局，长识别值不被截断。 -->
+                  <div class="grid grid-cols-[5rem_1fr] gap-1.5">
+                    <input type="text" data-field="amount" value={item.amount}
+                      oninput={(e) => { item.amount = (e.currentTarget as HTMLInputElement).value; }}
+                      class="input-field !py-1.5 !px-2.5 text-sm font-mono font-semibold" placeholder="金额" />
+                    <input type="text" data-field="merchant" value={item.merchant}
+                      oninput={(e) => { item.merchant = (e.currentTarget as HTMLInputElement).value; }}
+                      class="input-field !py-1.5 !px-2.5 text-sm truncate" placeholder="商户" />
+                    <input type="datetime-local" data-field="time" value={item.time}
+                      oninput={(e) => { item.time = (e.currentTarget as HTMLInputElement).value; }}
+                      class="input-field !py-1.5 !px-2.5 text-xs col-span-2" />
                   </div>
+
+                  <!-- 分类 + 入账 -->
                   <div class="flex items-center gap-2">
                     <select bind:value={item.categoryId}
-                      class="input-field !py-1.5 !px-2.5 text-xs flex-1">
+                      class="input-field !py-1.5 !px-2.5 text-xs flex-1 min-w-0">
                       {#each item.categoryOptions as cat}
                         <option value={cat.id}>{cat.name}</option>
                       {/each}
                     </select>
                     <button onclick={() => saveSingleBatchItem(item)} disabled={!item.amount || item.saved}
-                      class="px-3 py-1.5 bg-stone-100 text-stone-600 text-xs rounded-full hover:bg-stone-200 disabled:opacity-30">
+                      class="px-3 py-1.5 bg-stone-100 text-stone-600 text-xs rounded-full hover:bg-stone-200 disabled:opacity-30 shrink-0">
                       入账
                     </button>
                   </div>
+
+                  <!-- 原始 OCR 文本折叠区（failed 时自动展开） -->
+                  {#if item.rawOcrText}
+                    <div>
+                      <button onclick={() => { item.expandRaw = !item.expandRaw; batchItems = [...batchItems]; }}
+                        class="text-[10px] text-stone-400 hover:text-stone-600">
+                        {item.expandRaw ? '▲ 收起原始文本' : '▼ 查看原始 OCR 文本'}
+                      </button>
+                      {#if item.expandRaw}
+                        <p class="mt-1 text-[11px] text-stone-500 font-mono bg-stone-50 rounded-lg p-2 max-h-20 overflow-y-auto whitespace-pre-wrap">
+                          {item.rawOcrText}
+                        </p>
+                      {/if}
+                    </div>
+                  {/if}
                 </div>
               </div>
             </div>
@@ -1437,21 +1604,38 @@
           <span class="text-xs text-green-600 font-medium">已配置</span>
           <span class="text-xs bg-clay-100 text-clay-700 px-2 py-0.5 rounded-full">{$ocrMode}</span>
         </div>
-        <p class="text-xs text-stone-400 mb-2">
-          {$ocrMode === 'smart' ? '智能模式：优先使用云端 OCR（百度），额度耗尽自动降级本地' :
-           $ocrMode === 'cloud' ? '强制云端模式：始终使用云端 OCR' :
-           '本地识别失败时自动使用云端 OCR（百度）'}
+        <p class="text-xs text-stone-400 mb-3">
+          {$ocrMode === 'smart' ? '智能模式：高精度版优先 → 标准版 → 本地识别，额度耗尽自动降级' :
+           $ocrMode === 'cloud' ? '强制云端模式：始终使用云端 OCR（高精度版优先）' :
+           '本地识别失败时自动使用云端 OCR（高精度版优先）'}
         </p>
-        <div class="mb-3">
-          <div class="flex items-center justify-between text-xs mb-1">
-            <span class="text-stone-400">本月额度</span>
-            <span class={cloudQuota.quotaExhausted ? 'text-red-500 font-medium' : cloudQuotaRemaining <= 100 ? 'text-amber-600 font-medium' : 'text-stone-400'}>
-              {cloudQuota.quotaExhausted ? '已耗尽' : `${cloudQuota.count} / 1000 次${cloudQuotaRemaining <= 100 ? ' ⚠️' : ''}`}
-            </span>
+        <!-- 双版本进度条 -->
+        <div class="space-y-2.5 mb-3">
+          <!-- 高精度版 -->
+          <div>
+            <div class="flex items-center justify-between text-xs mb-0.5">
+              <span class="text-stone-400">高精度版</span>
+              <span class={cloudQuota.accurate.quotaExhausted ? 'text-red-500 font-medium' : cloudAccurateRemaining <= 100 ? 'text-amber-600 font-medium' : 'text-stone-400'}>
+                {cloudQuota.accurate.quotaExhausted ? '已耗尽' : `${cloudQuota.accurate.count} / 1000 次${cloudAccurateRemaining <= 100 ? ' ⚠️' : ''}`}
+              </span>
+            </div>
+            <div class="w-full h-1 bg-stone-100 rounded-full overflow-hidden">
+              <div class="h-full rounded-full {cloudQuota.accurate.quotaExhausted ? 'bg-red-400' : cloudAccurateRemaining <= 100 ? 'bg-amber-400' : 'bg-clay-500'}"
+                   style="width:{cloudQuota.accurate.quotaExhausted ? 100 : Math.min(100, cloudQuota.accurate.count / 1000 * 100)}%"></div>
+            </div>
           </div>
-          <div class="w-full h-1 bg-stone-100 rounded-full overflow-hidden">
-            <div class="h-full rounded-full {cloudQuota.quotaExhausted ? 'bg-red-400' : cloudQuotaRemaining <= 100 ? 'bg-amber-400' : 'bg-clay-500'}"
-                 style="width:{cloudQuota.quotaExhausted ? 100 : Math.min(100, cloudQuota.count / 1000 * 100)}%"></div>
+          <!-- 标准版 -->
+          <div>
+            <div class="flex items-center justify-between text-xs mb-0.5">
+              <span class="text-stone-400">标准版</span>
+              <span class={cloudQuota.general.quotaExhausted ? 'text-red-500 font-medium' : cloudGeneralRemaining <= 100 ? 'text-amber-600 font-medium' : 'text-stone-400'}>
+                {cloudQuota.general.quotaExhausted ? '已耗尽' : `${cloudQuota.general.count} / 1000 次${cloudGeneralRemaining <= 100 ? ' ⚠️' : ''}`}
+              </span>
+            </div>
+            <div class="w-full h-1 bg-stone-100 rounded-full overflow-hidden">
+              <div class="h-full rounded-full {cloudQuota.general.quotaExhausted ? 'bg-red-400' : cloudGeneralRemaining <= 100 ? 'bg-amber-400' : 'bg-clay-500'}"
+                   style="width:{cloudQuota.general.quotaExhausted ? 100 : Math.min(100, cloudQuota.general.count / 1000 * 100)}%"></div>
+            </div>
           </div>
         </div>
         <a href="/settings#ocr" class="text-sm text-clay-600 font-medium hover:text-clay-700">配置 API Key →</a>

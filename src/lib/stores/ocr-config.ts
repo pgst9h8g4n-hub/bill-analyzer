@@ -57,4 +57,5 @@ export async function setMode(mode: 'local' | 'cloud' | 'auto' | 'smart'): Promi
 }
 
 // Re-export quota functions for convenience
-export { hasCloudConfig, getTodayCloudQuota, isCloudQuotaNearlyExhausted } from '$lib/ocr/cloud';
+export { hasCloudConfig, getTodayCloudQuota, isCloudQuotaNearlyExhausted, isCloudQuotaExhausted, markQuotaExhausted, incrementCloudQuota, runCloudOCRCascade, callCloudOCR } from '$lib/ocr/cloud';
+export type { DualQuota, BaiduOCRVersion } from '$lib/ocr/cloud';
