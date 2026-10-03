@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { createExpense } from '$lib/db/expenses';
-  import { getCategories } from '$lib/db';
+  import { getCategories, getUnsortedCategoryId, UNSORTED_CATEGORY_NAME } from '$lib/db';
   import { centsToYuan } from '$lib/utils/format';
   import type { Category } from '$lib/db';
   import { currentUserId, currentLedgerId } from '$lib/session';
@@ -10,6 +10,7 @@
   import { get } from 'svelte/store';
   import { ocrMode, ocrProvider, loadConfig, hasCloudConfig, getTodayCloudQuota, isCloudQuotaNearlyExhausted } from '$lib/stores/ocr-config';
   import { callCloudOCR, runCloudOCRCascade, type OCRConfig, type DualQuota, getSmartModeConfig } from '$lib/ocr/cloud';
+  import { MERCHANT_CATEGORY, CATEGORY_ALIASES } from '$lib/parse/category-keywords';
 
   let ocrAmount = '';
   let ocrTime = new Date().toISOString().slice(0, 16);
@@ -36,6 +37,7 @@
   let cloudOCRError = '';
   let cloudHasConfig = false;
   let categories: Category[] = [];
+  let unsortedCategoryId = 0; // 待整理兜底分类 id，分类加载后回填
   let selectedImage: string | null = null;
   let cameraInput: HTMLInputElement | undefined;
   let batchInput: HTMLInputElement | undefined;
@@ -291,11 +293,14 @@
   async function saveSingleBatchItem(item: BatchItem) {
     if (!item.amount || isNaN(parseFloat(item.amount))) return;
     const { createExpense } = await import('$lib/db/expenses');
+    // 空商户兜底：识别/手填都没商户时，落到"待整理"分类，方便事后归类
+    let catId = item.categoryId;
+    if (!item.merchant.trim() && unsortedCategoryId > 0) catId = unsortedCategoryId;
     await createExpense(ledgerId, {
       userId,
       amount: item.amount,
       date: item.time || new Date().toISOString(),
-      categoryId: item.categoryId,
+      categoryId: catId,
       merchant: item.merchant || undefined,
       isRefund: false,
     });
@@ -330,82 +335,7 @@
   let userId = 0;
   let ledgerId = 0;
 
-  // 更精确的商户/分类关键词排序：长词优先、具体优先于泛化
-  // 规则顺序：越具体的越靠前，支付平台/泛词放最后
-  const MERCHANT_CATEGORY: [string, string][] = [
-    // ── 平台/品牌（最长最具体，优先）──────────────────────
-    ['抖音生活服务', '购物'], ['美团外卖', '餐饮'], ['饿了么', '餐饮'], ['盒马鲜生', '购物'],
-    ['麦当劳', '餐饮'], ['肯德基', '餐饮'], ['星巴克', '餐饮'], ['瑞幸', '餐饮'],
-    ['喜茶', '餐饮'], ['奈雪', '餐饮'], ['奶茶', '餐饮'], ['咖啡', '餐饮'], ['汉堡', '餐饮'],
-    ['高德打车', '交通'], ['滴滴出行', '交通'], ['滴滴', '交通'], ['哈啰出行', '交通'],
-    ['淘宝', '购物'], ['天猫', '购物'], ['拼多多', '购物'], ['京东', '购物'],
-    ['唯品会', '购物'], ['得物', '购物'], ['网易严选', '购物'],
-    ['爱奇艺', '娱乐'], ['腾讯视频', '娱乐'], ['优酷', '娱乐'], ['B站', '娱乐'], ['哔哩哔哩', '娱乐'],
-    ['美团', '餐饮'], ['大众点评', '餐饮'], ['大众', '餐饮'],
-    // ── 金融/保险/行政（泛词兜底）─────────────────────────
-    ['支付宝', '其他'], ['微信支付', '其他'], ['云闪付', '其他'],
-    ['交通违章', '交通'], ['交通罚款', '其他'], ['交警', '交通'], ['交管12123', '其他'],
-    ['车险', '其他'], ['平安保险', '其他'], ['人保', '其他'], ['太平洋保险', '其他'],
-    ['财产保险', '其他'], ['社会保险', '其他'], ['公积金', '其他'], ['社保', '其他'],
-    ['非税收入', '其他'], ['税务局', '其他'], ['财政局', '其他'],
-    // ── 交通 ──────────────────────────────────────────────
-    ['地铁', '交通'], ['公交', '交通'], ['共享单车', '交通'], ['摩拜', '交通'], ['哈啰', '交通'],
-    ['加油', '交通'], ['中石化', '交通'], ['中石油', '交通'], ['停车', '交通'],
-    ['火车票', '交通'], ['飞机票', '交通'], ['高铁', '交通'], ['民航', '交通'],
-    ['打车', '交通'], ['网约车', '交通'],
-    // ── 餐饮 ──────────────────────────────────────────────
-    ['餐厅', '餐饮'], ['火锅', '餐饮'], ['烧烤', '餐饮'], [' pizza', '餐饮'],
-    // ── 购物 ──────────────────────────────────────────────
-    ['超市', '购物'], ['沃尔玛', '购物'], ['便利店', '购物'], ['罗森', '购物'], ['711', '购物'],
-    ['服装', '购物'], ['服饰', '购物'], ['鞋子', '购物'], ['鞋', '购物'],
-    ['化妆品', '购物'], ['美妆', '购物'], ['护肤品', '购物'],
-    ['数码', '购物'], ['电子产品', '购物'], ['手机', '购物'],
-    // ── 娱乐 ──────────────────────────────────────────────
-    ['电影', '娱乐'], ['电影院', '娱乐'], ['游戏', '娱乐'], ['充值', '娱乐'],
-    ['KTV', '娱乐'], ['按摩', '娱乐'], ['SPA', '娱乐'],
-    // ── 医疗 ──────────────────────────────────────────────
-    ['医院', '医疗'], ['药店', '医疗'], ['门诊', '医疗'], ['牙科', '医疗'], ['体检', '医疗'],
-    // ── 住房 ──────────────────────────────────────────────
-    ['房租', '住房'], ['物业费', '住房'], ['物业', '住房'], ['水电费', '住房'],
-    ['水费', '住房'], ['电费', '住房'], ['燃气费', '住房'], ['暖气费', '住房'],
-    ['房贷', '住房'], ['月供', '住房'],
-    // ── 通讯 ──────────────────────────────────────────────
-    ['话费', '通讯'], ['流量费', '通讯'], ['宽带', '通讯'],
-    // ── 教育 ──────────────────────────────────────────────
-    ['学费', '教育'], ['培训', '教育'], ['课程', '教育'], ['教材', '教育'],
-    // ── 泛词兜底（所有其他未匹配）──────────────────────────
-    ['保险', '其他'], ['金融', '其他'], ['银行', '其他'], ['消费', '其他'],
-    ['还款', '其他'], ['分期', '其他'],
-  ];
-
-  // ── 分类名称归一化映射 ───────────────────────────────────────
-  // 把 OCR 可能识别出的各类名称统一映射到标准分类名
-  const CATEGORY_ALIASES: Record<string, string> = {
-    // 餐饮相关
-    '餐饮': '餐饮', '饮食': '餐饮', '伙食': '餐饮', '吃饭': '餐饮', '三餐': '餐饮',
-    '外卖': '餐饮', '早餐': '餐饮', '午餐': '餐饮', '晚餐': '餐饮', '宵夜': '餐饮',
-    // 交通相关
-    '交通': '交通', '出行': '交通', '通勤': '交通', '旅途': '交通', '旅行': '交通',
-    '车': '交通', '油费': '交通', '停车费': '交通', '过路费': '交通', '高速费': '交通',
-    // 购物相关
-    '购物': '购物', '网购': '购物', '电商': '购物', '零售': '购物',
-    '购物消费': '购物', '购买商品': '购物', '商品': '购物',
-    // 娱乐相关
-    '娱乐': '娱乐', '休闲': '娱乐', '玩乐': '娱乐', '娱悦': '娱乐',
-    '文体': '娱乐', '兴趣爱好': '娱乐', '运动': '娱乐',
-    // 医疗相关
-    '医疗': '医疗', '健康': '医疗', '保健': '医疗', '医药': '医疗',
-    '药品': '医疗', '看病': '医疗', '就诊': '医疗',
-    // 住房相关
-    '住房': '住房', '居住': '住房', '房': '住房', '房产': '住房',
-    '房租': '住房', '房贷': '住房', '物业费': '住房',
-    // 通讯相关
-    '通讯': '通讯', '通信': '通讯', '手机': '通讯', '电话': '通讯', '网络': '通讯', '网费': '通讯',
-    // 教育相关
-    '教育': '教育', '学习': '教育', '培训': '教育', '学费': '教育',
-    // 其他
-    '其他': '其他', '杂项': '其他', '日常': '其他', '生活': '其他',
-  };
+  // 分类关键词表 MERCHANT_CATEGORY / CATEGORY_ALIASES 已抽到 $lib/parse/category-keywords 共享（与账单导入复用）
 
   // 合法 Tesseract LSTM 参数白名单，过滤掉不支持的键以减少噪音警告
   const VALID_TESS_PARAMS = new Set([
@@ -1294,6 +1224,7 @@
       const cats = await getCategories(ledgerId);
       console.log('[OCR] categories loaded:', cats.length, cats.map(c => c.name).join(','));
       categories = cats;
+      unsortedCategoryId = cats.find(c => c.name === UNSORTED_CATEGORY_NAME)?.id ?? 0;
       if (cats.length > 0 && selectedCategory === 0) {
         selectedCategory = cats[0].id;
       }
@@ -1315,11 +1246,14 @@
     }
     loading = true;
     try {
+      // 空商户兜底：识别/手填都没商户时，落到"待整理"分类，方便事后归类
+      let catId = selectedCategory;
+      if (!ocrMerchant.trim() && unsortedCategoryId > 0) catId = unsortedCategoryId;
       await createExpense(ledgerId, {
         userId,
         amount: ocrAmount,
         date: ocrTime || new Date().toISOString(),
-        categoryId: selectedCategory,
+        categoryId: catId,
         merchant: ocrMerchant || undefined,
         remark: remark || undefined,
         isRefund

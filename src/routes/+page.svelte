@@ -45,24 +45,31 @@
       </div>
 
       <!-- 快捷操作 -->
-      <div class="grid grid-cols-3 gap-3">
-        <a href="/ocr" class="bg-white rounded-2xl shadow-soft p-4 text-center block active:scale-[0.97] transition-transform">
+      <div class="grid grid-cols-4 gap-3">
+        <a href="/ocr" class="bg-white rounded-2xl shadow-soft p-3 text-center block active:scale-[0.97] transition-transform">
           <div class="w-10 h-10 rounded-full bg-amber-50 flex items-center justify-center text-xl mx-auto mb-2" aria-hidden="true">📸</div>
-          <div class="text-sm font-medium text-ink">拍照记账</div>
+          <div class="text-xs font-medium text-ink">拍照记账</div>
           <div class="text-[10px] text-stone-400 mt-0.5">OCR识别</div>
         </a>
-        <a href="/expenses" class="bg-white rounded-2xl shadow-soft p-4 text-center block active:scale-[0.97] transition-transform">
+        <a href="/expenses" class="bg-white rounded-2xl shadow-soft p-3 text-center block active:scale-[0.97] transition-transform">
           <div class="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-xl mx-auto mb-2" aria-hidden="true">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m5 12 7-7 7 7"/></svg>
           </div>
-          <div class="text-sm font-medium text-ink">手动录入</div>
+          <div class="text-xs font-medium text-ink">手动录入</div>
           <div class="text-[10px] text-stone-400 mt-0.5">添加记录</div>
         </a>
-        <a href="/stats" class="bg-white rounded-2xl shadow-soft p-4 text-center block active:scale-[0.97] transition-transform">
-          <div class="w-10 h-10 rounded-full bg-purple-50 flex items-center justify-center text-xl mx-auto mb-2" aria-hidden="true">
+        <a href="/import" class="bg-white rounded-2xl shadow-soft p-3 text-center block active:scale-[0.97] transition-transform">
+          <div class="w-10 h-10 rounded-full bg-emerald-50 flex items-center justify-center mx-auto mb-2" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2Z"/><path d="M12 11v6"/><path d="m9 14 3 3 3-3"/></svg>
+          </div>
+          <div class="text-xs font-medium text-ink">导入账单</div>
+          <div class="text-[10px] text-stone-400 mt-0.5">支付宝/微信/抖音</div>
+        </a>
+        <a href="/stats" class="bg-white rounded-2xl shadow-soft p-3 text-center block active:scale-[0.97] transition-transform">
+          <div class="w-10 h-10 rounded-full bg-purple-50 flex items-center justify-center mx-auto mb-2" aria-hidden="true">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="20" y2="10"/><line x1="18" x2="18" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="16"/></svg>
           </div>
-          <div class="text-sm font-medium text-ink">统计报表</div>
+          <div class="text-xs font-medium text-ink">统计报表</div>
           <div class="text-[10px] text-stone-400 mt-0.5">数据分析</div>
         </a>
       </div>

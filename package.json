@@ -8,6 +8,7 @@
     "dexie": "^4.4.5",
     "echarts": "^6.1.0",
     "lucide-svelte": "^1.0.1",
+    "pdfjs-dist": "^6.3.289",
     "postcss": "^8.5.26",
     "svelte": "^5.56.10",
     "svelte-check": "^4.7.6",
@@ -15,7 +16,8 @@
     "tesseract.js": "^7.0.0",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^6.0.3",
-    "vite": "^8.2.2"
+    "vite": "^8.2.2",
+    "xlsx": "^0.18.5"
   },
   "type": "module",
   "scripts": {

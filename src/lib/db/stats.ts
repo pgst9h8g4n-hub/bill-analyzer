@@ -1,4 +1,5 @@
 import { db } from '$lib/db';
+import { expenseSigned, isConsumptionScope } from '$lib/db/expense-math';
 import type { Expense, Category } from '$lib/db';
 
 export interface StatSummary {
@@ -18,7 +19,7 @@ export interface DailyStat {
 }
 
 function netReduce(s: number, e: Expense): number {
-  return s + (e.is_refund ? -e.amount_cents : e.amount_cents);
+  return s + (isConsumptionScope(e) ? expenseSigned(e) : 0);
 }
 
 export async function getSummary(ledgerId: number): Promise<StatSummary> {
@@ -69,7 +70,7 @@ export async function getCategoryStats(ledgerId: number, month: string): Promise
 
     const byCat = new Map<number, number>();
     for (const e of expenses) {
-      const val = e.is_refund ? -e.amount_cents : e.amount_cents;
+      const val = isConsumptionScope(e) ? expenseSigned(e) : 0;
       byCat.set(e.category_id, (byCat.get(e.category_id) ?? 0) + val);
     }
 
@@ -79,7 +80,7 @@ export async function getCategoryStats(ledgerId: number, month: string): Promise
         category: categories.find(c => c.id === catId)!,
         total
       }))
-      .filter((item): item is CategoryStat => item.category !== undefined)
+      .filter((item): item is CategoryStat => item.category !== undefined && item.total > 0)
       .sort((a, b) => b.total - a.total);
   } catch {
     return [];

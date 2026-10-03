@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { getExpenses, deleteExpense } from '$lib/db/expenses';
-  import { getCategories } from '$lib/db';
+  import { getCategories, UNSORTED_CATEGORY_NAME } from '$lib/db';
+  import { expenseSigned, isConsumptionScope, isIncome, isNeutral, isRefund, subTypeLabel, incomeReduce, neutralStats } from '$lib/db/expense-math';
   import { centsToYuan } from '$lib/utils/format';
   import type { Expense, Category } from '$lib/db';
   import { currentUserId, currentLedgerId } from '$lib/session';
@@ -17,6 +18,8 @@
   let filterCategoryId = 0;
   let searchKeyword = '';  // 关键词搜索（前端过滤商户/备注）
   let appliedCategoryName = '';  // 记录 URL 带过来的分类名，categories 加载后据此筛选
+  let hideRefunds = false;  // 隐藏退款（净消费视图）
+  let showOnlyExpense = false;  // 只看支出/消费（隐藏 收入 与 中性转账/还款/理财）
 
   let showForm = false;
   let editingId: number | null = null;
@@ -35,10 +38,7 @@
     const catName = params.get('category');
     if (catName) appliedCategoryName = decodeURIComponent(catName);
     categories = await getCategories(ledgerId);
-    if (categories.length > 0 && filterCategoryId === 0) {
-      filterCategoryId = categories[0].id;
-    }
-    // 应用 URL 带过来的分类筛选：按名称匹配到 id
+    // 仅当 URL 带分类参数时才预选；否则默认"全部分类"（filterCategoryId=0），显示全部记录
     if (appliedCategoryName) {
       const match = categories.find(c => c.name === appliedCategoryName);
       if (match) { filterCategoryId = match.id; filterStartDate = ''; filterEndDate = ''; }
@@ -47,9 +47,18 @@
     loading = false;
   });
 
-  // Reload expenses when user/ledger/filter changes
+  // Reload expenses when user/ledger changes
   $: if (userId > 0 && ledgerId > 0) {
-    loadExpenses();
+    // 同步刷新分类（onMount 时 ledger 可能尚未就绪，需随 session 重读）
+    getCategories(ledgerId).then(cats => {
+      categories = cats;
+      // 仅当 URL 带分类参数时才预选，否则保持"全部分类"
+      if (appliedCategoryName) {
+        const match = cats.find(c => c.name === appliedCategoryName);
+        if (match && filterCategoryId === 0) filterCategoryId = match.id;
+      }
+      loadExpenses();
+    });
   }
 
   async function loadExpenses() {
@@ -70,11 +79,40 @@
       })
     : expenses;
 
+  // 退款折叠：隐藏退款后列表/合计/分布条都基于非退款记录（净消费视图）
+  $: listExpenses = (() => {
+    let list = hideRefunds
+      ? visibleExpenses.filter(e => normSubTypeOf(e) !== 'refund')
+      : visibleExpenses;
+    if (showOnlyExpense) {
+      list = list.filter(e => normDirOf(e) === 'expense' || normSubTypeOf(e) === 'refund');
+    }
+    return list;
+  })();
+
+  // 规范化方向/子类型（老数据兜底）
+  function normDirOf(e: Expense): 'expense' | 'income' | 'neutral' { return e.direction ?? 'expense'; }
+  function normSubTypeOf(e: Expense): string { return e.subType ?? 'consumption'; }
+
+  // 退款笔数（用于开关节点显示，基于当前关键词过滤）
+  $: refundCount = visibleExpenses.filter(e => normSubTypeOf(e) === 'refund').length;
+
+  // 三分汇总：消费净额（= 消费 − 退款冲抵）/ 收入 / 中性笔数+金额 / 退款合计（单列，冲减消费）
+  $: summary = (() => {
+    const scope = listExpenses;
+    const consume = scope.reduce((s, e) => s + (isConsumptionScope(e) ? expenseSigned(e) : 0), 0);
+    const income = incomeReduce(scope);
+    const neutral = neutralStats(scope);
+    // 退款合计（退款是中性，单独统计用于展示"消费 − 退款"）
+    const refund = scope.reduce((s, e) => s + (isRefund(e) ? e.amount_cents : 0), 0);
+    return { consume, income, neutral, refund };
+  })();
+
   // 按月分组 → 月内按天分组。结构：[[month, [ [day, [exp]], ... ]], ...]
   // 月按倒序（新在前），月内天也倒序
   $: groupedByMonth = (() => {
     const byMonth = new Map<string, Expense[]>();
-    for (const e of visibleExpenses) {
+    for (const e of listExpenses) {
       const m = e.paid_at.slice(0, 7);
       const arr = byMonth.get(m) ?? [];
       arr.push(e);
@@ -103,19 +141,21 @@
     return y === curYear ? `${parseInt(m)}月` : `${y}年${parseInt(m)}月`;
   }
 
-  // 分组后总净合计（用于顶部汇总显示，跟随关键词过滤）
-  $: visibleTotal = visibleExpenses.reduce((s, e) => s + (e.is_refund ? -e.amount_cents : e.amount_cents), 0);
+  // 分组后消费净额合计（用于顶部汇总显示，跟随关键词过滤 + 退款折叠）
+  $: visibleTotal = listExpenses.reduce((s, e) => s + (isConsumptionScope(e) ? expenseSigned(e) : 0), 0);
 
-  // 分类分布（按当前可见记录聚合，净金额，退款冲减）。按金额降序。
+  // 分类分布（按当前可见记录聚合，仅消费口径，净金额退款冲减）。按金额降序。
   $: categoryDist = (() => {
-    if (visibleExpenses.length === 0) return [];
+    if (listExpenses.length === 0) return [];
     const byCat = new Map<number, number>();
-    for (const e of visibleExpenses) {
-      const val = e.is_refund ? -e.amount_cents : e.amount_cents;
+    for (const e of listExpenses) {
+      const val = isConsumptionScope(e) ? expenseSigned(e) : 0;
+      if (val === 0) continue;
       byCat.set(e.category_id, (byCat.get(e.category_id) ?? 0) + val);
     }
     const sum = Math.abs(visibleTotal);
     return Array.from(byCat.entries())
+      .filter(([, total]) => total !== 0)
       .map(([catId, total]) => {
         const info = getCatInfo(catId);
         return {
@@ -150,6 +190,9 @@
     const week = ['日','一','二','三','四','五','六'][new Date(day).getDay()];
     return `${parseInt(m)}月${parseInt(d)}日 周${week}`;
   }
+
+  // 编辑弹窗打开时，若当前记录属于"待整理"兜底分类，提示用户重新归类
+  $: editingUnsorted = showForm && categories.some(c => c.name === UNSORTED_CATEGORY_NAME && c.id === formCategoryId);
 
   function openAdd() {
     editingId = null;
@@ -260,21 +303,62 @@
       </div>
       <input type="text" bind:value={searchKeyword} placeholder="搜索商户 / 备注"
         class="input-field text-sm py-2 w-full" aria-label="搜索关键词" />
+      <!-- 退款折叠开关 -->
+      <label class="flex items-center gap-2.5 mt-2.5 cursor-pointer select-none">
+        <input type="checkbox" bind:checked={hideRefunds}
+          class="w-4 h-4 rounded border-stone-300 text-clay-600 focus:ring-clay-500" />
+        <span class="text-xs text-stone-500 font-medium">隐藏退款</span>
+        {#if refundCount > 0}
+          <span class="text-[11px] text-stone-400 ml-auto">共 {refundCount} 笔退款</span>
+        {/if}
+      </label>
+      <!-- 只看支出（隐藏收入/中性转账还款理财） -->
+      <label class="flex items-center gap-2.5 mt-1.5 cursor-pointer select-none">
+        <input type="checkbox" bind:checked={showOnlyExpense}
+          class="w-4 h-4 rounded border-stone-300 text-clay-600 focus:ring-clay-500" />
+        <span class="text-xs text-stone-500 font-medium">只看消费支出</span>
+      </label>
     </div>
 
-    <!-- 汇总（跟随关键词过滤） -->
-    {#if !loading && visibleExpenses.length > 0}
-      <div class="bg-white rounded-2xl shadow-card p-4 flex items-center justify-between">
-        <div>
-          <div class="text-xs text-stone-400 mb-0.5">{searchKeyword ? '搜索合计' : '筛选合计'}</div>
-          <div class="flex items-baseline gap-1">
-            <span class="text-sm text-clay-600">¥</span>
-            <span class="stat-number text-2xl" style="font-family:'JetBrains Mono',monospace;color:#B45309;">{centsToYuan(visibleTotal)}</span>
+    <!-- 三分汇总（跟随关键词过滤 + 退款折叠 + 只看支出） -->
+    {#if !loading && listExpenses.length > 0}
+      <div class="bg-white rounded-2xl shadow-card p-4 space-y-2.5">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-xs text-stone-400 mb-0.5">
+              {showOnlyExpense ? '消费净额' : (searchKeyword ? '搜索·消费净额' : '消费净额')}
+              {#if hideRefunds}（已隐藏退款）{/if}
+            </div>
+            <div class="flex items-baseline gap-1">
+              <span class="text-sm text-clay-600">¥</span>
+              <span class="stat-number text-2xl" style="font-family:'JetBrains Mono',monospace;color:#B45309;">{centsToYuan(Math.abs(summary.consume))}</span>
+            </div>
+          </div>
+          <div class="text-right">
+            <div class="text-xs text-stone-400">共 {listExpenses.length} 笔</div>
           </div>
         </div>
-        <div class="text-right">
-          <div class="text-xs text-stone-400">共 {visibleExpenses.length} 笔</div>
-        </div>
+        {#if summary.income > 0}
+          <div class="flex items-center justify-between border-t border-stone-100 pt-2.5">
+            <div class="text-xs text-stone-400">收入合计</div>
+            <div class="flex items-baseline gap-1">
+              <span class="text-sm text-green-600">+</span>
+              <span class="font-mono text-base font-semibold text-green-600" style="font-family:'JetBrains Mono',monospace;">¥{centsToYuan(summary.income)}</span>
+            </div>
+          </div>
+        {/if}
+        {#if summary.neutral.count > 0}
+          <div class="flex items-center justify-between border-t border-stone-100 pt-2.5">
+            <div class="text-xs text-stone-400">中性交易（{summary.neutral.count} 笔，不计入消费/收入）</div>
+            <div class="font-mono text-xs text-stone-400" style="font-family:'JetBrains Mono',monospace;">¥{centsToYuan(summary.neutral.total)}</div>
+          </div>
+        {/if}
+        {#if summary.refund > 0}
+          <div class="flex items-center justify-between border-t border-stone-100 pt-2.5">
+            <div class="text-xs text-amber-600">退款合计（已冲减消费净额）</div>
+            <div class="font-mono text-xs text-amber-600" style="font-family:'JetBrains Mono',monospace;">−¥{centsToYuan(summary.refund)}</div>
+          </div>
+        {/if}
       </div>
 
       <!-- 分类分布条（点段筛选到该分类） -->
@@ -315,11 +399,15 @@
 
     <!-- 按天分组列表 -->
     {#if !loading}
-      {#if visibleExpenses.length === 0}
+      {#if listExpenses.length === 0}
         <div class="text-center py-16 bg-white rounded-2xl shadow-soft">
           <div class="text-4xl mb-3" aria-hidden="true">📒</div>
-          <p class="text-base font-medium text-stone-500">{searchKeyword ? '没有匹配的记录' : '暂无消费记录'}</p>
-          <p class="text-sm mt-1 text-stone-400">{searchKeyword ? '换个关键词试试' : '点击右下角按钮开始记账'}</p>
+          <p class="text-base font-medium text-stone-500">
+            {hideRefunds ? '没有非退款记录' : (searchKeyword ? '没有匹配的记录' : '暂无消费记录')}
+          </p>
+          <p class="text-sm mt-1 text-stone-400">
+            {hideRefunds ? '取消隐藏退款可看到全部' : (searchKeyword ? '换个关键词试试' : '点击右下角按钮开始记账')}
+          </p>
         </div>
       {:else}
         {#each groupedByMonth as [month, days] (month)}
@@ -334,7 +422,7 @@
               </div>
               <span class="font-mono text-sm font-semibold"
                 style="font-family:'JetBrains Mono',monospace;color:#B45309;">
-                {centsToYuan(days.reduce((s, [, de]) => s + de.reduce((ss, e) => ss + (e.is_refund ? -e.amount_cents : e.amount_cents), 0), 0))}
+                {centsToYuan(days.reduce((s, [, de]) => s + de.reduce((ss, e) => ss + (isConsumptionScope(e) ? expenseSigned(e) : 0), 0), 0))}
               </span>
             </div>
 
@@ -345,12 +433,13 @@
                 <span class="text-xs font-semibold text-stone-500">{dayLabel(day)}</span>
                 <span class="font-mono text-xs"
                   style="font-family:'JetBrains Mono',monospace;color:#78716C;">
-                  {centsToYuan(dayExpenses.reduce((s, e) => s + (e.is_refund ? -e.amount_cents : e.amount_cents), 0))}
+                  {centsToYuan(dayExpenses.reduce((s, e) => s + (isConsumptionScope(e) ? expenseSigned(e) : 0), 0))}
                 </span>
               </div>
               <div class="bg-white rounded-2xl shadow-soft overflow-hidden divide-y divide-stone-100">
                 {#each dayExpenses as expense (expense.id)}
-                  <div class="p-3.5 flex items-center gap-3 active:bg-stone-50 transition-colors">
+                  <div class="p-3.5 flex items-center gap-3 active:bg-stone-50 transition-colors"
+                    class:list={[isNeutral(expense) ? 'opacity-55' : '']}>
                     <div class="w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0"
                       style="background-color: {getCatInfo(expense.category_id).color}18; color: {getCatInfo(expense.category_id).color};">
                       {getCatInfo(expense.category_id).icon}
@@ -358,8 +447,12 @@
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-2">
                         <span class="font-medium text-ink text-sm">{getCatInfo(expense.category_id).name}</span>
-                        {#if expense.is_refund}
-                          <span class="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">退款</span>
+                        {#if isIncome(expense)}
+                          <span class="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">收入</span>
+                        {:else if isRefund(expense)}
+                          <span class="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium">退款</span>
+                        {:else if subTypeLabel(expense)}
+                          <span class="text-[10px] bg-stone-100 text-stone-500 px-1.5 py-0.5 rounded-full font-medium">{subTypeLabel(expense)}</span>
                         {/if}
                       </div>
                       <div class="text-xs text-stone-400 truncate mt-0.5">
@@ -373,8 +466,11 @@
                     </div>
                     <div class="text-right shrink-0">
                       <div class="font-mono font-semibold text-sm"
-                        style={expense.is_refund ? 'color:#16A34A;font-family:"JetBrains Mono",monospace;' : 'color:#1C1917;font-family:"JetBrains Mono",monospace;'}>
-                        {expense.is_refund ? '-' : ''}¥{centsToYuan(expense.amount_cents)}
+                        style={isIncome(expense)
+                          ? 'color:#16A34A;font-family:"JetBrains Mono",monospace;'
+                          : (isRefund(expense) ? 'color:#D97706;font-family:"JetBrains Mono",monospace;'
+                          : (isNeutral(expense) ? 'color:#A8A29E;font-family:"JetBrains Mono",monospace;' : 'color:#1C1917;font-family:"JetBrains Mono",monospace;'))}>
+                        {isIncome(expense) ? '+' : (isRefund(expense) ? '−' : (isNeutral(expense) ? '·' : '−'))}¥{centsToYuan(expense.amount_cents)}
                       </div>
                       <div class="flex gap-1 mt-1.5 justify-end">
                         <button type="button" onclick={() => openEdit(expense)} aria-label="编辑" class="p-1.5 text-stone-400 hover:text-clay-600 transition-colors rounded-lg hover:bg-clay-50">
@@ -421,6 +517,12 @@
           <div class="bg-red-50 text-red-600 text-sm px-4 py-2.5 rounded-xl">{formError}</div>
         {/if}
 
+        {#if editingUnsorted}
+          <div class="bg-amber-50 border border-amber-200 text-amber-700 text-sm px-4 py-2.5 rounded-xl">
+            这笔暂未归类（"待整理"），请选择真实分类后保存。
+          </div>
+        {/if}
+
         <div>
           <label for="expense-amount" class="block text-sm font-medium text-ink mb-1.5">金额（元）</label>
           <input id="expense-amount" type="number" step="0.01" bind:value={formAmount} placeholder="0.00"
@@ -442,7 +544,8 @@
             {#each categories as cat}
               <button type="button" onclick={() => formCategoryId = cat.id}
                 class="flex flex-col items-center py-2 rounded-xl border-2 transition-all duration-150
-                  {formCategoryId === cat.id ? 'border-clay-600 bg-clay-50' : 'border-stone-100 hover:border-stone-200'}">
+                  {formCategoryId === cat.id ? 'border-clay-600 bg-clay-50' : 'border-stone-100 hover:border-stone-200'}
+                  {cat.name === UNSORTED_CATEGORY_NAME ? '!border-amber-300 !bg-amber-50' : ''}">
                 <span class="text-xl leading-none">{cat.icon}</span>
                 <span class="text-[10px] text-stone-600 mt-0.5 font-medium">{cat.name}</span>
               </button>

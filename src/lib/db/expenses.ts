@@ -1,4 +1,5 @@
 import { db } from '$lib/db';
+import { expenseSigned, isConsumptionScope } from '$lib/db/expense-math';
 import type { Expense, Category } from '$lib/db';
 
 export interface ExpenseFormData {
@@ -8,6 +9,8 @@ export interface ExpenseFormData {
   merchant?: string;
   remark?: string;
   isRefund: boolean;
+  direction?: 'expense' | 'income' | 'neutral';
+  subType?: 'consumption' | 'transfer' | 'repay' | 'refund' | 'redpacket' | 'fund_return';
 }
 
 export interface ExpenseFilters {
@@ -16,8 +19,9 @@ export interface ExpenseFilters {
   categoryId?: number;
 }
 
+// 消费净额（含退款冲抵）：只有消费口径内的笔（expense + refund）参与，income/中性(转账/还款/理财)为 0
 function netReduce(s: number, e: Expense): number {
-  return s + (e.is_refund ? -e.amount_cents : e.amount_cents);
+  return s + (isConsumptionScope(e) ? expenseSigned(e) : 0);
 }
 
 export async function getExpenses(ledgerId: number, filters?: ExpenseFilters): Promise<Expense[]> {
@@ -49,6 +53,9 @@ export async function getExpenses(ledgerId: number, filters?: ExpenseFilters): P
 }
 
 export async function createExpense(ledgerId: number, data: ExpenseFormData & { userId: number }): Promise<void> {
+  const isRefund = data.isRefund;
+  const direction = data.direction ?? 'expense';
+  const subType = data.subType ?? (isRefund ? 'refund' : 'consumption');
   await db.expenses.add({
     user_id: data.userId,
     ledger_id: ledgerId,
@@ -56,10 +63,42 @@ export async function createExpense(ledgerId: number, data: ExpenseFormData & { 
     category_id: data.categoryId,
     merchant: data.merchant,
     remark: data.remark,
-    is_refund: data.isRefund,
+    is_refund: isRefund,
     paid_at: data.date,
-    created_at: new Date().toISOString()
+    created_at: new Date().toISOString(),
+    direction,
+    subType
   });
+}
+
+// 账单导入：一次性批量写入多条（含方向/子类型/分类/来源），返回写入条数
+export interface ImportRecord {
+  paid_at: string;
+  amount_cents: number;
+  category_id: number;
+  merchant?: string;
+  remark?: string;
+  direction: 'expense' | 'income' | 'neutral';
+  subType: 'consumption' | 'transfer' | 'repay' | 'refund' | 'redpacket' | 'fund_return';
+}
+export async function importExpenses(ledgerId: number, userId: number, records: ImportRecord[]): Promise<number> {
+  if (records.length === 0) return 0;
+  const now = new Date().toISOString();
+  const rows = records.map(r => ({
+    user_id: userId,
+    ledger_id: ledgerId,
+    amount_cents: r.amount_cents,
+    category_id: r.category_id,
+    merchant: r.merchant || undefined,
+    remark: r.remark || undefined,
+    is_refund: r.subType === 'refund',
+    paid_at: r.paid_at,
+    created_at: now,
+    direction: r.direction,
+    subType: r.subType
+  }));
+  await db.expenses.bulkAdd(rows);
+  return rows.length;
 }
 
 export async function updateExpense(id: number, data: Partial<ExpenseFormData>): Promise<void> {
@@ -73,7 +112,15 @@ export async function updateExpense(id: number, data: Partial<ExpenseFormData>):
     if (data.categoryId !== undefined) updates.category_id = data.categoryId;
     if (data.merchant !== undefined) updates.merchant = data.merchant;
     if (data.remark !== undefined) updates.remark = data.remark;
-    if (data.isRefund !== undefined) updates.is_refund = data.isRefund;
+    if (data.isRefund !== undefined) {
+      updates.is_refund = data.isRefund;
+      // 手动勾选退款同步 subType；取消勾选恢复 consumption（仅当原 subType 为 refund/consumption 时）
+      if (data.isRefund) {
+        updates.subType = 'refund';
+      } else if (expense.subType === 'refund' || !expense.subType) {
+        updates.subType = 'consumption';
+      }
+    }
 
     await db.expenses.update(id, updates);
   } catch {
@@ -112,7 +159,7 @@ export async function getExpensesByCategory(ledgerId: number, month: string): Pr
 
     const byCat = new Map<number, number>();
     for (const e of expenses) {
-      const val = e.is_refund ? -e.amount_cents : e.amount_cents;
+      const val = isConsumptionScope(e) ? expenseSigned(e) : 0;
       byCat.set(e.category_id, (byCat.get(e.category_id) ?? 0) + val);
     }
 

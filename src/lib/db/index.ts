@@ -36,6 +36,9 @@ export interface Expense {
   is_refund: boolean;
   paid_at: string;
   created_at: string;
+  // 方向/子类型（导入账单时区分 消费/收入/中性交易）。可选：老数据缺失时按 expense+consumption 兜底。
+  direction?: 'expense' | 'income' | 'neutral';
+  subType?: 'consumption' | 'transfer' | 'repay' | 'refund' | 'redpacket' | 'fund_return';
 }
 
 export interface Category {
@@ -229,7 +232,7 @@ export class XiaoLiujiDB extends Dexie {
     // 强制重建所有表索引，清除损坏的 keyPath
     this.version(6).stores({
       users: '++id, username',
-      ledgers: '++id, code',
+      ledgers: '++id, code, created_by',
       members: '[ledger_id+user_id], ledger_id, user_id',
       expenses: '++id, user_id, ledger_id, [user_id+paid_at], [ledger_id+paid_at], category_id, paid_at',
       categories: '++id, ledger_id, name, is_default',
@@ -267,6 +270,31 @@ export class XiaoLiujiDB extends Dexie {
         }
       }
     });
+
+    // v7: 账单导入 — 给 Expense 加 direction/subType 概念
+    // 注意：必须重复声明全部 stores，否则 Dexie 会 drop 未列出的表（v3 教训）
+    // 老数据没有 direction/subType 字段，迁移里统一补齐 expense+consumption
+    this.version(7).stores({
+      users: '++id, username',
+      ledgers: '++id, code, created_by',
+      members: '[ledger_id+user_id], ledger_id, user_id',
+      expenses: '++id, user_id, ledger_id, [user_id+paid_at], [ledger_id+paid_at], category_id, paid_at, direction, subType',
+      categories: '++id, ledger_id, name, is_default',
+      budgets: '++id, [ledger_id+month], ledger_id, [user_id+month], user_id, month',
+      settings: 'key'
+    }).upgrade(async () => {
+      // 老数据补齐 direction/subType
+      await db.expenses.toCollection().modify(e => {
+        if (!e.direction) e.direction = 'expense';
+        if (!e.subType) e.subType = 'consumption';
+      });
+      // 播种"转账"中性分类 + "待整理"（幂等）
+      const users = await db.users.toArray();
+      for (const user of users) {
+        const ledger = await db.ledgers.where('created_by').equals(user.id).first();
+        if (ledger) await seedDefaultCategories(ledger.id);
+      }
+    });
   }
 }
 
@@ -296,8 +324,15 @@ export const DEFAULT_CATEGORIES: Omit<Category, 'id' | 'ledger_id'>[] = [
   { name: '教育', icon: '📚', color: '#06b6d4', is_default: true },
   { name: '住房', icon: '🏠', color: '#f97316', is_default: true },
   { name: '通讯', icon: '📱', color: '#6366f1', is_default: true },
-  { name: '其他', icon: '📝', color: '#6b7280', is_default: true }
+  { name: '其他', icon: '📝', color: '#6b7280', is_default: true },
+  { name: '待整理', icon: '🗂️', color: '#9ca3af', is_default: true },
+  { name: '转账', icon: '💱', color: '#d4d4d8', is_default: true }
 ];
+
+// "待整理"分类名常量，OCR/导入空商户兜底用
+export const UNSORTED_CATEGORY_NAME = '待整理';
+// 中性交易（转账/还款/退款冲抵）专用分类名，导入中性交易时归类用
+export const TRANSFER_CATEGORY_NAME = '转账';
 
 // ─── 初始化函数 ────────────────────────────────────────────
 
@@ -328,4 +363,24 @@ export async function getCategoryById(id: number, ledgerId?: number): Promise<Ca
     return db.categories.where('ledger_id').equals(ledgerId).filter(c => c.id === id).first();
   }
   return db.categories.get(id);
+}
+
+// 取某账本的"待整理"兜底分类 id（OCR 空商户时用）。缺失时即时播种，保证可用。
+export async function getUnsortedCategoryId(ledgerId: number): Promise<number> {
+  let cat = await db.categories.where('ledger_id').equals(ledgerId).filter(c => c.name === UNSORTED_CATEGORY_NAME).first();
+  if (!cat) {
+    await seedDefaultCategories(ledgerId);
+    cat = await db.categories.where('ledger_id').equals(ledgerId).filter(c => c.name === UNSORTED_CATEGORY_NAME).first();
+  }
+  return cat!.id;
+}
+
+// 取某账本的"转账"中性分类 id（导入中性交易归类用）。缺失时即时播种。
+export async function getTransferCategoryId(ledgerId: number): Promise<number> {
+  let cat = await db.categories.where('ledger_id').equals(ledgerId).filter(c => c.name === TRANSFER_CATEGORY_NAME).first();
+  if (!cat) {
+    await seedDefaultCategories(ledgerId);
+    cat = await db.categories.where('ledger_id').equals(ledgerId).filter(c => c.name === TRANSFER_CATEGORY_NAME).first();
+  }
+  return cat!.id;
 }

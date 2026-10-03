@@ -1,4 +1,5 @@
 import { db } from '$lib/db';
+import { expenseSigned, isConsumptionScope } from '$lib/db/expense-math';
 import type { Budget } from '$lib/db';
 
 export async function getBudgets(ledgerId: number, month: string): Promise<Budget[]> {
@@ -16,7 +17,7 @@ export async function getCurrentMonthSpending(ledgerId: number, month: string): 
       .where('ledger_id').equals(ledgerId)
       .and((e) => e.paid_at.startsWith(prefix))
       .toArray();
-    return expenses.reduce((s, e) => s + (e.is_refund ? -e.amount_cents : e.amount_cents), 0);
+    return expenses.reduce((s, e) => s + (isConsumptionScope(e) ? expenseSigned(e) : 0), 0);
   } catch {
     return 0;
   }
