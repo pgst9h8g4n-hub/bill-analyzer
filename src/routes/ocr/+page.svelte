@@ -328,9 +328,6 @@
   // 并发调用（如 PSM 4 + PSM 11 的 Promise.all）会互相杀掉对方的 worker，
   // 导致 "Could not establish connection. Receiving end does not exist."
   let workerLock = Promise.resolve();
-  let debugText = '';
-  const _OCR_DEBUG_PH = '粘贴OCR识别出的文字，然后点一键应用测试解析效果';
-  let manualApply = false;
 
   let userId = 0;
   let ledgerId = 0;
@@ -1266,23 +1263,6 @@
     }
   }
 
-  function applyDebugText() {
-    const text = debugText;
-    if (!text) return;
-    const amount = parseAmount(text);
-    if (amount) ocrAmount = amount;
-    const merchant = detectMerchant(text);
-    if (merchant) ocrMerchant = merchant;
-    const parsedTime = parseTime(text);
-    if (parsedTime) ocrTime = parsedTime;
-    const catName = detectCategoryName(text, merchant);
-    if (catName) {
-      const matched = categories.find(c => c.name === catName);
-      if (matched) selectedCategory = matched.id;
-    }
-    previousOcrResult = text;
-  }
-
   function goBack() { goto('/expenses'); }
 
   function resetForm() {
@@ -1507,28 +1487,6 @@
           <p class="text-xs text-stone-500 leading-relaxed whitespace-pre-wrap max-h-24 overflow-y-auto">{previousOcrResult}</p>
         </div>
       {/if}
-
-      <!-- 手动输入 OCR 文字调试 -->
-      <div class="bg-white rounded-2xl shadow-card p-4 space-y-3">
-        <div class="flex items-center gap-2">
-          <span class="text-sm font-medium text-ink">手动输入 OCR 文字（调试用）</span>
-          <button type="button" onclick={() => { applyDebugText(); manualApply = true; }}
-            class="ml-auto px-3 py-1 bg-clay-600 text-white text-xs rounded-full hover:bg-clay-700 transition">
-            一键应用
-          </button>
-        </div>
-        <textarea bind:value={debugText} rows="6"
-          placeholder={_OCR_DEBUG_PH}
-          class="input-field text-xs font-mono resize-none"></textarea>
-        {#if debugText}
-          <div class="text-xs text-stone-500">
-            金额: <span class="font-mono font-semibold text-ink">{parseAmount(debugText) || '(未找到)'}</span>
-            · 商户: <span class="font-mono font-semibold text-ink">{detectMerchant(debugText) || '(未找到)'}</span>
-            · 分类: <span class="font-mono font-semibold text-ink">{detectCategoryName(debugText) || '(未找到)'}</span>
-            · 时间: <span class="font-mono font-semibold text-ink">{parseTime(debugText) || '(未找到)'}</span>
-          </div>
-        {/if}
-      </div>
 
       <!-- 云端 OCR 配置入口 -->
       {#if cloudHasConfig}
