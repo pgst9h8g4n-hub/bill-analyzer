@@ -4,7 +4,22 @@ import type { Budget } from '$lib/db';
 
 export async function getBudgets(ledgerId: number, month: string): Promise<Budget[]> {
   try {
-    return db.budgets.where('ledger_id').equals(ledgerId).and((b) => b.month === month).toArray();
+    const rows = await db.budgets
+      .where('ledger_id').equals(ledgerId)
+      .and((b) => b.month === month)
+      .toArray();
+    // 历史脏数据：总预算曾被存成 category_id=0，与正确的 null 并存。
+    // 同一月多条"总预算"记录合并为一条（按 limit 相加），避免页面双计。
+    const totals = rows.filter((b) => !b.category_id);
+    if (totals.length > 1) {
+      const merged: Budget = {
+        ...totals[0],
+        limit_cents: totals.reduce((s, b) => s + b.limit_cents, 0)
+      };
+      const rest = rows.filter((b) => b.category_id);
+      return [merged, ...rest];
+    }
+    return rows;
   } catch {
     return [];
   }
@@ -58,9 +73,12 @@ export async function getCategorySpending(ledgerId: number, month: string, categ
 }
 
 export async function saveBudget(ledgerId: number, data: { month: string; limitCents: number; categoryId: number | null }): Promise<void> {
+  // UI 的"总预算"会传 categoryId=0，统一归一为 null（总预算记录 category_id=null）；
+  // 否则严格 === 比对不上已存的 null 记录 → 每次新增一条 0，读取端（按 null 过滤）永远不显示。
+  const categoryId = data.categoryId || null;
   const existing = await db.budgets
     .where('ledger_id').equals(ledgerId)
-    .and((b) => b.month === data.month && b.category_id === data.categoryId)
+    .and((b) => b.month === data.month && b.category_id === categoryId)
     .first();
 
   if (existing) {
@@ -70,7 +88,7 @@ export async function saveBudget(ledgerId: number, data: { month: string; limitC
       ledger_id: ledgerId,
       month: data.month,
       limit_cents: data.limitCents,
-      category_id: data.categoryId
+      category_id: categoryId
     });
   }
 }

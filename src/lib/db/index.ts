@@ -295,6 +295,20 @@ export class XiaoLiujiDB extends Dexie {
         if (ledger) await seedDefaultCategories(ledger.id);
       }
     });
+
+    // v8: budgets 表补 limit_cents / category_id 索引
+    // 之前 7 个版本 schema 都没声明这两个字段——Dexie 存对象时值仍会持久化，
+    // 但 .and(b => b.category_id === ...) 这类过滤无索引可走、行为不可靠。
+    // 加普通索引后匹配稳定；已有数据不丢（只补索引，不重建表）。
+    this.version(8).stores({
+      users: '++id, username',
+      ledgers: '++id, code, created_by',
+      members: '[ledger_id+user_id], ledger_id, user_id',
+      expenses: '++id, user_id, ledger_id, [user_id+paid_at], [ledger_id+paid_at], category_id, paid_at, direction, subType',
+      categories: '++id, ledger_id, name, is_default',
+      budgets: '++id, [ledger_id+month], ledger_id, [user_id+month], user_id, month, limit_cents, category_id',
+      settings: 'key'
+    });
   }
 }
 

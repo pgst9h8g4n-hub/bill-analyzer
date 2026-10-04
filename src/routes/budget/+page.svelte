@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { getBudgets, getCurrentMonthSpending, saveBudget, getCategorySpending, deleteBudget, getBudgetMonths } from '$lib/db/budget';
   import { getCategories } from '$lib/db';
   import { centsToYuan, getCurrentMonth } from '$lib/utils/format';
@@ -28,16 +27,18 @@
       getCurrentMonthSpending(ledgerId, selectedMonth)
     ]);
     if (categories.length > 0 && !addCategoryId) addCategoryId = categories[0].id;
+    // 拉"有预算或有消费"的月份（降序），当前月若不在则置顶——保证月份下拉始终有内容
+    const months = await getBudgetMonths(ledgerId);
+    availableMonths = months.includes(selectedMonth) ? months : [selectedMonth, ...months];
     await refreshCatSpending();
   }
 
-  onMount(async () => {
-    if (!ledgerId) return;
-    // 拉可选月份（有预算/消费的月份降序），当前月若不在则置顶
-    availableMonths = await getBudgetMonths(ledgerId);
-    if (!availableMonths.includes(selectedMonth)) availableMonths = [selectedMonth, ...availableMonths];
-    await loadForMonth();
-  });
+  // ledgerId 是异步 store，mount 时可能还是 0；由下方 watcher 在它就绪时自动加载
+  let loadedLedgerId = 0;
+  $: if (ledgerId && ledgerId !== loadedLedgerId) {
+    loadedLedgerId = ledgerId;
+    loadForMonth();
+  }
 
   function pickMonth(m: string) {
     selectedMonth = m;
@@ -69,7 +70,7 @@
 
   // 删除某条预算（总预算 categoryId=null 或分类预算 categoryId>0）
   async function handleDelete(budget: Budget) {
-    const label = budget.category_id === null ? '总预算' : `「${categories.find(c => c.id === budget.category_id)?.name ?? '该分类'}」预算`;
+    const label = !budget.category_id ? '总预算' : `「${categories.find(c => c.id === budget.category_id)?.name ?? '该分类'}」预算`;
     if (!confirm(`确定删除 ${selectedMonth} ${label}？`)) return;
     await deleteBudget(ledgerId, budget.id);
     await loadForMonth();
@@ -82,8 +83,10 @@
     return '#B45309';
   }
 
-  const totalBudget = budgets
-    .filter(b => b.category_id === null)
+  // 响应式派生：budgets 是响应式 let，totalBudget 必须用 $: 才能在 loadForMonth 刷新后重算；
+  // 普通 const 不会重算，{#if totalBudget>0} 永远拿旧值 → 总预算卡不显示（分类走 #each 直接吃 budgets 故正常）
+  $: totalBudget = budgets
+    .filter(b => !b.category_id)
     .reduce((s, b) => s + b.limit_cents, 0);
 
   $: progress = totalBudget > 0 ? Math.round(spending / totalBudget * 100) : 0;
@@ -135,7 +138,7 @@
           </span>
           <span class="text-stone-400">{progress}%</span>
         </div>
-        <button onclick={() => handleDelete(budgets.find(b => b.category_id === null)!)}
+        <button onclick={() => handleDelete(budgets.find(b => !b.category_id)!)}
           class="mt-3 w-full border-2 border-stone-200 text-stone-500 py-2 rounded-full text-sm hover:bg-stone-50 hover:border-stone-300 transition">
           删除总预算
         </button>
