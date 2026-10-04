@@ -53,6 +53,7 @@ export interface Category {
 export interface Budget {
   id: number;
   ledger_id: number;
+  user_id: number;
   month: string;
   limit_cents: number;
   category_id: number | null;

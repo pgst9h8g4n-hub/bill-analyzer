@@ -8,6 +8,7 @@
   $: userId = $currentUserId;
   $: ledgerId = $currentLedgerId;
   let selectedMonth = getCurrentMonth();  // 默认当前月，可切历史月
+  let monthPinnedByUser = false;         // 用户手动切过月份后不再自动锚到最新有数据月
   let availableMonths: string[] = [];
   let budgets: Budget[] = [];
   let categories: Category[] = [];
@@ -27,8 +28,14 @@
       getCurrentMonthSpending(ledgerId, selectedMonth)
     ]);
     if (categories.length > 0 && !addCategoryId) addCategoryId = categories[0].id;
-    // 拉"有预算或有消费"的月份（降序），当前月若不在则置顶——保证月份下拉始终有内容
+    // 拉"有预算或有消费"的月份（降序）；若当前 selectedMonth 不在其中有数据月份里且用户没手动切过，
+    // 自动锚到最新有数据月（避免打开落在"系统当前月=10月"却是空态）
     const months = await getBudgetMonths(ledgerId);
+    if (!monthPinnedByUser && months.length > 0 && !months.includes(selectedMonth)) {
+      selectedMonth = months[0];
+      // 锚定后重拉该月数据
+      [budgets, spending] = await Promise.all([getBudgets(ledgerId, selectedMonth), getCurrentMonthSpending(ledgerId, selectedMonth)]);
+    }
     availableMonths = months.includes(selectedMonth) ? months : [selectedMonth, ...months];
     await refreshCatSpending();
   }
@@ -42,6 +49,7 @@
 
   function pickMonth(m: string) {
     selectedMonth = m;
+    monthPinnedByUser = true;  // 用户手动选了，后续 loadForMonth 不再自动改回
     loadForMonth();
   }
 
@@ -62,7 +70,8 @@
     await saveBudget(ledgerId, {
       month: selectedMonth,
       limitCents: Math.round(parseFloat(addLimit) * 100),
-      categoryId: addCategoryId || null
+      categoryId: addCategoryId || null,
+      userId
     });
     await loadForMonth();
     showAddForm = false;

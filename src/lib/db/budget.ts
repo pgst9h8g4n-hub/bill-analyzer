@@ -72,7 +72,10 @@ export async function getCategorySpending(ledgerId: number, month: string, categ
   }
 }
 
-export async function saveBudget(ledgerId: number, data: { month: string; limitCents: number; categoryId: number | null }): Promise<void> {
+export async function saveBudget(
+  ledgerId: number,
+  data: { month: string; limitCents: number; categoryId: number | null; userId?: number }
+): Promise<void> {
   // UI 的"总预算"会传 categoryId=0，统一归一为 null（总预算记录 category_id=null）；
   // 否则严格 === 比对不上已存的 null 记录 → 每次新增一条 0，读取端（按 null 过滤）永远不显示。
   const categoryId = data.categoryId || null;
@@ -86,6 +89,7 @@ export async function saveBudget(ledgerId: number, data: { month: string; limitC
   } else {
     await db.budgets.add({
       ledger_id: ledgerId,
+      user_id: data.userId ?? 0, // 填 user_id，[user_id+month] 复合索引才可靠（老记录可能缺，0 占位）
       month: data.month,
       limit_cents: data.limitCents,
       category_id: categoryId
