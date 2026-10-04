@@ -69,6 +69,26 @@ export async function changePassword(userId: number, oldPassword: string, newPas
   }
 }
 
+export async function changeUsername(userId: number, newUsername: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const name = newUsername.trim();
+    if (!name) return { success: false, error: '用户名不能为空' };
+    if (name.length < 2) return { success: false, error: '用户名至少 2 个字符' };
+    const user = await db.users.get(userId);
+    if (!user) return { success: false, error: '用户不存在' };
+    if (user.username === name) return { success: true }; // 没改，直接成功
+    // 唯一性：登录按 username 精确查，重名会导致登录歧义
+    const taken = await db.users.where('username').equals(name).first();
+    if (taken && taken.id !== userId) {
+      return { success: false, error: '用户名已被占用' };
+    }
+    await db.users.update(userId, { username: name });
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: '修改失败，请重试' };
+  }
+}
+
 export async function deleteUser(userId: number): Promise<void> {
   // 删除该用户所有账本成员关系和消费记录，但保留其他用户的账本数据
   await db.transaction('rw', db.members, db.expenses, db.budgets, db.users, async () => {

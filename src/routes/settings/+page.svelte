@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { changePassword, deleteUser, clearSession } from '$lib/stores/auth';
+  import { changePassword, changeUsername, deleteUser, clearSession } from '$lib/stores/auth';
   import { currentUserId, currentUsername } from '$lib/session';
   import { ocrMode, ocrProvider, loadConfig, saveConfig, clearConfig, setMode } from '$lib/stores/ocr-config';
   import { getOCRConfig, getTodayCloudQuota, type DualQuota } from '$lib/ocr/cloud';
@@ -13,6 +13,11 @@
   let newPassword = '';
   let confirmNewPassword = '';
   let passwordMsg = '';
+  let passwordSaving = false;
+  // 账户名
+  let newName = '';
+  let nameMsg = '';
+  let nameSaving = false;
   let deleting = false;
 
   // OCR 配置
@@ -20,6 +25,7 @@
   let apiKey = '';
   let secretKey = '';
   let ocrMsg = '';
+  let ocrSaving = false;
   let ocrModeValue: 'local' | 'cloud' | 'smart' = 'smart';
   let hasConfig = false;
   let todayQuota: DualQuota = { period: '', accurate: { period: '', count: 0, quotaExhausted: false }, general: { period: '', count: 0, quotaExhausted: false } };
@@ -29,6 +35,8 @@
   ocrProvider.subscribe(v => { ocrProviderName = v; })();
 
   onMount(async () => {
+    // 预填当前账户名，便于"小改"场景（如补全昵称）直接编辑
+    newName = $currentUsername;
     const config = await getOCRConfig();
     if (config) {
       ocrProviderName = config.provider;
@@ -51,6 +59,7 @@
 
   async function handleChangePassword() {
     passwordMsg = '';
+    if (passwordSaving) return;
     if (!oldPassword || !newPassword || !confirmNewPassword) {
       passwordMsg = '请填写所有字段';
       return;
@@ -67,19 +76,59 @@
       passwordMsg = '请先登录';
       return;
     }
-    const result = await changePassword(userId, oldPassword, newPassword);
-    if (result.success) {
-      passwordMsg = '✅ 密码修改成功';
-      oldPassword = '';
-      newPassword = '';
-      confirmNewPassword = '';
-    } else {
-      passwordMsg = '❌ ' + (result.error ?? '修改失败');
+    passwordSaving = true;
+    try {
+      const result = await changePassword(userId, oldPassword, newPassword);
+      if (result.success) {
+        passwordMsg = '✅ 密码修改成功';
+        oldPassword = '';
+        newPassword = '';
+        confirmNewPassword = '';
+      } else {
+        passwordMsg = '❌ ' + (result.error ?? '修改失败');
+      }
+    } finally {
+      passwordSaving = false;
+    }
+  }
+
+  async function handleChangeUsername() {
+    nameMsg = '';
+    if (nameSaving) return;
+    if (!userId) {
+      nameMsg = '请先登录';
+      return;
+    }
+    nameSaving = true;
+    try {
+      const result = await changeUsername(userId, newName);
+      if (result.success) {
+        // 同步显示层 + 会话存储里的 username（restoreSession 按 userId 查，不依赖存储名，
+        // 此处只更新展示缓存；不能 clearSession，那会清掉登录态导致下次要重登）
+        const trimmed = newName.trim();
+        currentUsername.set(trimmed);
+        const { db } = await import('$lib/db');
+        const sessionRow = await db.settings.get('session');
+        if (sessionRow?.value) {
+          try {
+            const s = JSON.parse(sessionRow.value);
+            if (s.userId === userId) s.username = trimmed;
+            await db.settings.put({ key: 'session', value: JSON.stringify(s) });
+          } catch {}
+        }
+        localStorage.setItem('xiaoliuji_session', JSON.stringify({ ...JSON.parse(localStorage.getItem('xiaoliuji_session') ?? '{}'), username: trimmed }));
+        nameMsg = '✅ 账户名已更新';
+      } else {
+        nameMsg = '❌ ' + (result.error ?? '修改失败');
+      }
+    } finally {
+      nameSaving = false;
     }
   }
 
   async function handleSaveOCRConfig() {
     ocrMsg = '';
+    if (ocrSaving) return;
     if (!apiKey || apiKey.length < 10) {
       ocrMsg = '❌ 请输入有效的 API Key';
       return;
@@ -88,6 +137,7 @@
       ocrMsg = '❌ 请输入有效的 Secret Key';
       return;
     }
+    ocrSaving = true;
     try {
       await saveConfig({mode: ocrModeValue,
         provider: ocrProviderName as 'baidu' | 'tencent',
@@ -102,6 +152,8 @@
       ocrProvider.set(ocrProviderName as 'baidu' | 'tencent');
     } catch (e) {
       ocrMsg = '❌ 保存失败: ' + (e as Error).message;
+    } finally {
+      ocrSaving = false;
     }
   }
 
@@ -150,6 +202,23 @@
       </div>
     </div>
 
+    <!-- 修改账户名 -->
+    <div class="bg-white rounded-2xl shadow-card p-4">
+      <h2 class="font-semibold text-ink text-base mb-3">修改账户名</h2>
+      <form onsubmit={(e) => { e.preventDefault(); handleChangeUsername(); }} class="space-y-3">
+        <input id="account-name" type="text" bind:value={newName} placeholder="新账户名"
+          class="input-field" />
+        {#if nameMsg}
+          <p class="text-sm font-medium {nameMsg.includes('更新') ? 'text-green-600' : 'text-red-600'}">{nameMsg}</p>
+        {/if}
+        <button type="submit" disabled={nameSaving}
+          class="btn-primary w-full disabled:opacity-50">
+          {nameSaving ? '保存中…' : '保存账户名'}
+        </button>
+      </form>
+      <p class="text-xs text-stone-400 mt-2">账户名用于登录，需至少 2 个字符且不能与其他账户重复</p>
+    </div>
+
     <!-- 修改密码 -->
     <div class="bg-white rounded-2xl shadow-card p-4">
       <h2 class="font-semibold text-ink text-base mb-3">修改密码</h2>
@@ -163,9 +232,9 @@
         {#if passwordMsg}
           <p class="text-sm font-medium {passwordMsg.includes('成功') ? 'text-green-600' : 'text-red-600'}">{passwordMsg}</p>
         {/if}
-        <button type="submit"
-          class="btn-primary w-full">
-          确认修改
+        <button type="submit" disabled={passwordSaving}
+          class="btn-primary w-full disabled:opacity-50">
+          {passwordSaving ? '修改中…' : '确认修改'}
         </button>
       </form>
     </div>
@@ -249,6 +318,19 @@
                    class="text-clay-600 hover:underline">百度控制台</a>为准
               </p>
             </div>
+          {:else if hasConfig && ocrProviderName === 'tencent'}
+            <!-- 腾讯暂无本地计数（数据层 DualQuota 只记录百度双版本），仅展示免费额度说明 -->
+            <div class="mt-2 space-y-1.5">
+              <div class="flex items-center justify-between text-xs">
+                <span class="text-stone-500">通用文本识别</span>
+                <span class="text-stone-400">免费 500 次 / 月</span>
+              </div>
+              <p class="text-xs text-stone-400">
+                本地暂不统计腾讯额度，实际以
+                <a href="https://console.cloud.tencent.com/ocr" target="_blank"
+                   class="text-clay-600 hover:underline">腾讯云控制台</a>为准
+              </p>
+            </div>
           {/if}
         </div>
         <div>
@@ -262,8 +344,8 @@
         {#if ocrMsg}
           <p class="text-sm font-medium {ocrMsg.includes('成功') ? 'text-green-600' : 'text-red-600'}">{ocrMsg}</p>
         {/if}
-        <button onclick={handleSaveOCRConfig} class="btn-primary w-full">
-          保存配置
+        <button onclick={handleSaveOCRConfig} disabled={ocrSaving} class="btn-primary w-full disabled:opacity-50">
+          {ocrSaving ? '保存中…' : '保存配置'}
         </button>
         {#if hasConfig}
           <button onclick={handleClearOCRConfig} class="w-full text-xs text-stone-400 hover:text-stone-600 py-2">
