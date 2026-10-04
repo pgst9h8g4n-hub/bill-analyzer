@@ -10,6 +10,25 @@ export async function getBudgets(ledgerId: number, month: string): Promise<Budge
   }
 }
 
+// 该账本「有预算 或 有消费」的月份（降序）。预算页月份下拉用——历史月也能补设预算/看消费。
+export async function getBudgetMonths(ledgerId: number): Promise<string[]> {
+  try {
+    const [budgets, expenses] = await Promise.all([
+      db.budgets.where('ledger_id').equals(ledgerId).toArray(),
+      db.expenses.where('ledger_id').equals(ledgerId).toArray()
+    ]);
+    const set = new Set<string>();
+    for (const b of budgets) set.add(b.month);
+    for (const e of expenses) {
+      const m = e.paid_at.slice(0, 7);
+      if (m) set.add(m);
+    }
+    return Array.from(set).sort().reverse();
+  } catch {
+    return [];
+  }
+}
+
 export async function getCurrentMonthSpending(ledgerId: number, month: string): Promise<number> {
   try {
     const prefix = month + '-';
@@ -53,5 +72,27 @@ export async function saveBudget(ledgerId: number, data: { month: string; limitC
       limit_cents: data.limitCents,
       category_id: data.categoryId
     });
+  }
+}
+
+// 删除某条预算（按 id）。id 不存在时静默返回（幂等，避免误删/重复删报错）。
+export async function deleteBudget(ledgerId: number, id: number): Promise<void> {
+  await db.budgets.delete(id);
+}
+
+// 某分类在指定月份的预算状态（记账弹窗超预算提醒用）。
+// limit=null 表示该分类该月没设预算；spent=该分类该月消费净额（已花正值）；over=已花>预算。
+export async function getCategoryBudgetStatus(
+  ledgerId: number,
+  month: string,
+  categoryId: number
+): Promise<{ limit: number | null; spent: number; over: boolean }> {
+  try {
+    const limit = (await getBudgets(ledgerId, month))
+      .find((b) => b.category_id === categoryId)?.limit_cents ?? null;
+    const spent = await getCategorySpending(ledgerId, month, categoryId);
+    return { limit, spent, over: limit !== null && limit > 0 && spent > limit };
+  } catch {
+    return { limit: null, spent: 0, over: false };
   }
 }

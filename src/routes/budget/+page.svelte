@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getBudgets, getCurrentMonthSpending, saveBudget, getCategorySpending } from '$lib/db/budget';
+  import { getBudgets, getCurrentMonthSpending, saveBudget, getCategorySpending, deleteBudget, getBudgetMonths } from '$lib/db/budget';
   import { getCategories } from '$lib/db';
   import { centsToYuan, getCurrentMonth } from '$lib/utils/format';
   import type { Budget, Category } from '$lib/db';
@@ -8,7 +8,8 @@
 
   $: userId = $currentUserId;
   $: ledgerId = $currentLedgerId;
-  let currentMonth = getCurrentMonth();
+  let selectedMonth = getCurrentMonth();  // 默认当前月，可切历史月
+  let availableMonths: string[] = [];
   let budgets: Budget[] = [];
   let categories: Category[] = [];
   let spending = 0;
@@ -19,20 +20,33 @@
   let addLimit = '';
   let addCategoryId = 0;
 
-  onMount(async () => {
+  async function loadForMonth() {
     if (!ledgerId) return;
     [budgets, categories, spending] = await Promise.all([
-      getBudgets(ledgerId, currentMonth),
+      getBudgets(ledgerId, selectedMonth),
       getCategories(ledgerId),
-      getCurrentMonthSpending(ledgerId, currentMonth)
+      getCurrentMonthSpending(ledgerId, selectedMonth)
     ]);
-    if (categories.length > 0) addCategoryId = categories[0].id;
+    if (categories.length > 0 && !addCategoryId) addCategoryId = categories[0].id;
     await refreshCatSpending();
+  }
+
+  onMount(async () => {
+    if (!ledgerId) return;
+    // 拉可选月份（有预算/消费的月份降序），当前月若不在则置顶
+    availableMonths = await getBudgetMonths(ledgerId);
+    if (!availableMonths.includes(selectedMonth)) availableMonths = [selectedMonth, ...availableMonths];
+    await loadForMonth();
   });
+
+  function pickMonth(m: string) {
+    selectedMonth = m;
+    loadForMonth();
+  }
 
   async function refreshCatSpending() {
     const ids = [...new Set(budgets.filter(b => b.category_id != null).map(b => b.category_id!))];
-    const results = await Promise.all(ids.map(id => getCategorySpending(ledgerId, currentMonth, id)));
+    const results = await Promise.all(ids.map(id => getCategorySpending(ledgerId, selectedMonth, id)));
     catSpending = new Map(ids.map((id, i) => [id, results[i]]));
   }
 
@@ -45,14 +59,20 @@
   async function handleSave() {
     if (!addLimit || isNaN(parseFloat(addLimit)) || parseFloat(addLimit) <= 0) return;
     await saveBudget(ledgerId, {
-      month: currentMonth,
+      month: selectedMonth,
       limitCents: Math.round(parseFloat(addLimit) * 100),
       categoryId: addCategoryId || null
     });
-    budgets = await getBudgets(ledgerId, currentMonth);
-    spending = await getCurrentMonthSpending(ledgerId, currentMonth);
-    await refreshCatSpending();
+    await loadForMonth();
     showAddForm = false;
+  }
+
+  // 删除某条预算（总预算 categoryId=null 或分类预算 categoryId>0）
+  async function handleDelete(budget: Budget) {
+    const label = budget.category_id === null ? '总预算' : `「${categories.find(c => c.id === budget.category_id)?.name ?? '该分类'}」预算`;
+    if (!confirm(`确定删除 ${selectedMonth} ${label}？`)) return;
+    await deleteBudget(ledgerId, budget.id);
+    await loadForMonth();
   }
 
   function getProgressColor(used: number, limit: number): string {
@@ -78,10 +98,21 @@
     <div class="bg-white rounded-2xl shadow-card p-5">
       <div class="flex items-center justify-between mb-4">
         <div>
-          <h2 class="font-semibold text-ink text-base">本月预算</h2>
-          <p class="text-xs text-stone-400 mt-0.5">{currentMonth}</p>
+          <h2 class="font-semibold text-ink text-base">预算</h2>
+          <p class="text-xs text-stone-400 mt-0.5">按月设，可补历史月</p>
         </div>
         <button onclick={openAdd} class="btn-primary py-2 px-4 text-sm leading-none">+ 设置</button>
+      </div>
+
+      <!-- 月份选择（可切历史月补设预算 / 看该月消费） -->
+      <div class="flex items-center gap-2 mb-4">
+        <span class="text-xs text-stone-500 shrink-0">月份</span>
+        <select value={selectedMonth} onchange={(e) => pickMonth((e.target as HTMLSelectElement).value)}
+          class="input-field text-sm py-2 flex-1 select-arrow">
+          {#each availableMonths as m}
+            <option value={m}>{m.split('-')[0]}年{parseInt(m.split('-')[1])}月</option>
+          {/each}
+        </select>
       </div>
 
       {#if totalBudget > 0}
@@ -104,6 +135,10 @@
           </span>
           <span class="text-stone-400">{progress}%</span>
         </div>
+        <button onclick={() => handleDelete(budgets.find(b => b.category_id === null)!)}
+          class="mt-3 w-full border-2 border-stone-200 text-stone-500 py-2 rounded-full text-sm hover:bg-stone-50 hover:border-stone-300 transition">
+          删除总预算
+        </button>
       {:else}
         <div class="text-center py-8 text-stone-400">
           <div class="text-3xl mb-2" aria-hidden="true">💰</div>
@@ -120,23 +155,29 @@
         <div class="space-y-3">
           {#each budgets as budget}
             {#if budget.category_id}
-              <div>
-                <div class="flex items-center justify-between mb-1.5">
-                  <div class="flex items-center gap-2">
-                    <div class="w-7 h-7 rounded-lg flex items-center justify-center text-base"
-                      style="background-color: {categories.find(c => c.id === budget.category_id)?.color ?? '#6b7280'}18;">
-                      {categories.find(c => c.id === budget.category_id)?.icon ?? '📝'}
+              <div class="flex items-start gap-2">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center justify-between mb-1.5">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <div class="w-7 h-7 rounded-lg flex items-center justify-center text-base shrink-0"
+                        style="background-color: {categories.find(c => c.id === budget.category_id)?.color ?? '#6b7280'}18;">
+                        {categories.find(c => c.id === budget.category_id)?.icon ?? '📝'}
+                      </div>
+                      <span class="text-sm font-medium text-ink truncate">{categories.find(c => c.id === budget.category_id)?.name ?? '其他'}</span>
                     </div>
-                    <span class="text-sm font-medium text-ink">{categories.find(c => c.id === budget.category_id)?.name ?? '其他'}</span>
+                    <span class="text-sm font-mono text-stone-500 shrink-0 ml-2" style="font-family:'JetBrains Mono',monospace;">
+                      ¥{centsToYuan(catSpending.get(budget.category_id) ?? 0)} / ¥{centsToYuan(budget.limit_cents)}
+                    </span>
                   </div>
-                  <span class="text-sm font-mono text-stone-500" style="font-family:'JetBrains Mono',monospace;">
-                    ¥{centsToYuan(catSpending.get(budget.category_id) ?? 0)} / ¥{centsToYuan(budget.limit_cents)}
-                  </span>
+                  <div class="h-1.5 bg-stone-100 rounded-full overflow-hidden">
+                    <div class="h-full rounded-full transition-all duration-500"
+                      style="width: {Math.min(Math.round((catSpending.get(budget.category_id) ?? 0) / (budget.limit_cents || 1) * 100), 100)}%; background-color: {getProgressColor(catSpending.get(budget.category_id) ?? 0, budget.limit_cents)}"></div>
+                  </div>
                 </div>
-                <div class="h-1.5 bg-stone-100 rounded-full overflow-hidden">
-                  <div class="h-full rounded-full transition-all duration-500"
-                    style="width: {Math.min(Math.round((catSpending.get(budget.category_id) ?? 0) / (budget.limit_cents || 1) * 100), 100)}%; background-color: {getProgressColor(catSpending.get(budget.category_id) ?? 0, budget.limit_cents)}"></div>
-                </div>
+                <button type="button" onclick={() => handleDelete(budget)} aria-label="删除该分类预算"
+                  class="p-1.5 text-stone-400 hover:text-red-500 hover:bg-red-50 transition rounded-lg shrink-0">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                </button>
               </div>
             {/if}
           {/each}

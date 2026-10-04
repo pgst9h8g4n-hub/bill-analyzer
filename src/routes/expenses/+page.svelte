@@ -2,8 +2,9 @@
   import { onMount } from 'svelte';
   import { getExpenses, deleteExpense } from '$lib/db/expenses';
   import { getCategories, UNSORTED_CATEGORY_NAME } from '$lib/db';
+  import { getCategoryBudgetStatus } from '$lib/db/budget';
   import { expenseSigned, isConsumptionScope, isIncome, isNeutral, isRefund, subTypeLabel, incomeReduce, neutralStats } from '$lib/db/expense-math';
-  import { centsToYuan } from '$lib/utils/format';
+  import { centsToYuan, getCurrentMonth } from '$lib/utils/format';
   import type { Expense, Category } from '$lib/db';
   import { currentUserId, currentLedgerId } from '$lib/session';
 
@@ -238,6 +239,21 @@
 
   // 编辑弹窗打开时，若当前记录属于"待整理"兜底分类，提示用户重新归类
   $: editingUnsorted = showForm && categories.some(c => c.name === UNSORTED_CATEGORY_NAME && c.id === formCategoryId);
+
+  // 记账弹窗超预算提醒（非阻断）：所选分类在"当前系统月"已有预算且已花超预算时提示。
+  // 只提示、不拦截保存。formCategoryId / showForm / ledgerId 变化时重查。
+  let formBudgetWarn: { limit: number; spent: number; catName: string } | null = null;
+  $: if (showForm && formCategoryId > 0 && ledgerId > 0) {
+    (async () => {
+      const sysMonth = getCurrentMonth();
+      const st = await getCategoryBudgetStatus(ledgerId, sysMonth, formCategoryId);
+      const cat = categories.find(c => c.id === formCategoryId);
+      if (st.over && cat) formBudgetWarn = { limit: st.limit!, spent: st.spent, catName: cat.name };
+      else formBudgetWarn = null;
+    })();
+  } else {
+    formBudgetWarn = null;
+  }
 
   function openAdd() {
     editingId = null;
@@ -613,6 +629,13 @@
 
         {#if formError}
           <div class="bg-red-50 text-red-600 text-sm px-4 py-2.5 rounded-xl">{formError}</div>
+        {/if}
+
+        {#if formBudgetWarn}
+          <div class="bg-amber-50 border border-amber-200 text-amber-700 text-xs px-4 py-2.5 rounded-xl flex items-start gap-2">
+            <span class="shrink-0" aria-hidden="true">⚠</span>
+            <span>本月「{formBudgetWarn.catName}」已超预算（预算 ¥{centsToYuan(formBudgetWarn.limit)}，已花 ¥{centsToYuan(formBudgetWarn.spent)}）。可继续记账，或调整分类/金额。</span>
+          </div>
         {/if}
 
         {#if editingUnsorted}
