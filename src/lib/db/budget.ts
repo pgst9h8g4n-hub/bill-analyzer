@@ -102,6 +102,34 @@ export async function deleteBudget(ledgerId: number, id: number): Promise<void> 
   await db.budgets.delete(id);
 }
 
+// 把 fromMonth 的预算（总+分类）复制到 toMonth；toMonth 已有同 (category_id) 的则不覆盖，
+// 避免误改用户手动设过的预算。返回实际新增的条数。
+export async function copyBudgetsFrom(
+  ledgerId: number,
+  fromMonth: string,
+  toMonth: string,
+  userId?: number
+): Promise<number> {
+  if (!fromMonth || fromMonth === toMonth) return 0;
+  const src = await getBudgets(ledgerId, fromMonth);
+  if (src.length === 0) return 0;
+  const existing = await getBudgets(ledgerId, toMonth);
+  const haveCats = new Set(existing.map((b) => b.category_id ?? 0));
+  let added = 0;
+  for (const b of src) {
+    const key = b.category_id ?? 0;
+    if (haveCats.has(key)) continue; // 目标月已有同类预算，不覆盖
+    await saveBudget(ledgerId, {
+      month: toMonth,
+      limitCents: b.limit_cents,
+      categoryId: b.category_id,
+      userId
+    });
+    added++;
+  }
+  return added;
+}
+
 // 某分类在指定月份的预算状态（记账弹窗超预算提醒用）。
 // limit=null 表示该分类该月没设预算；spent=该分类该月消费净额（已花正值）；over=已花>预算。
 export async function getCategoryBudgetStatus(

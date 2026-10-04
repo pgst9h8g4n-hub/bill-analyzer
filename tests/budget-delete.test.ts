@@ -2,7 +2,7 @@ import { beforeAll, afterAll, describe, it, expect } from 'vitest';
 import 'fake-indexeddb';
 import 'fake-indexeddb/auto';
 import { db } from '$lib/db';
-import { getBudgets, saveBudget, deleteBudget } from '$lib/db/budget';
+import { getBudgets, saveBudget, deleteBudget, copyBudgetsFrom } from '$lib/db/budget';
 
 beforeAll(async () => {
   await db.budgets.clear();
@@ -96,5 +96,29 @@ describe('deleteBudget', () => {
     await db.budgets.clear();
     await expect(deleteBudget(1, 99999)).resolves.toBeUndefined();
     expect(await getBudgets(1, '2026-05')).toHaveLength(0);
+  });
+});
+
+describe('copyBudgetsFrom', () => {
+  it('复制上月总/分类预算到目标月，已存在的同类不覆盖', async () => {
+    await db.budgets.clear();
+    // 上月 2026-04：总预算 50000 + 餐饮 30000
+    await saveBudget(1, { month: '2026-04', limitCents: 50000, categoryId: null });
+    await saveBudget(1, { month: '2026-04', limitCents: 30000, categoryId: 1 });
+    // 目标月 2026-05：已有餐饮 99999（应保留，不被覆盖）
+    await saveBudget(1, { month: '2026-05', limitCents: 99999, categoryId: 1 });
+
+    const n = await copyBudgetsFrom(1, '2026-04', '2026-05');
+    expect(n).toBe(1); // 只新增了总预算（餐饮已有，不覆盖）
+
+    const may = await getBudgets(1, '2026-05');
+    expect(may.find((b) => !b.category_id)?.limit_cents).toBe(50000);  // 总预算被复制进来
+    expect(may.find((b) => b.category_id === 1)?.limit_cents).toBe(99999); // 原有餐饮保留
+  });
+
+  it('源月无预算 / 同月 → 不复制（返回 0）', async () => {
+    await db.budgets.clear();
+    expect(await copyBudgetsFrom(1, '2026-04', '2026-05')).toBe(0); // 源月空
+    expect(await copyBudgetsFrom(1, '2026-05', '2026-05')).toBe(0); // 同月
   });
 });

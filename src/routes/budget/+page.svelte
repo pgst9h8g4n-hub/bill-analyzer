@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getBudgets, getCurrentMonthSpending, saveBudget, getCategorySpending, deleteBudget, getBudgetMonths } from '$lib/db/budget';
+  import { getBudgets, getCurrentMonthSpending, saveBudget, getCategorySpending, deleteBudget, getBudgetMonths, copyBudgetsFrom } from '$lib/db/budget';
   import { getCategories } from '$lib/db';
   import { centsToYuan, getCurrentMonth } from '$lib/utils/format';
   import type { Budget, Category } from '$lib/db';
@@ -85,6 +85,18 @@
     await loadForMonth();
   }
 
+  // 复制上一个有预算的月份 → 当前 selectedMonth（已有同分类预算的不覆盖）
+  async function copyPrevMonth() {
+    if (!ledgerId) return;
+    // 找比 selectedMonth 更早的、有预算的最近月（getBudgetMonths 降序，取第一个 < selectedMonth 的）
+    const months = await getBudgetMonths(ledgerId);
+    const prev = months.find((m) => m < selectedMonth);
+    if (!prev) { alert(`没有找到比 ${selectedMonth} 更早的预算月份`); return; }
+    const n = await copyBudgetsFrom(ledgerId, prev, selectedMonth, userId);
+    if (n === 0) { alert(`${prev} 的预算已在 ${selectedMonth} 全部存在，未新增`); return; }
+    await loadForMonth();
+  }
+
   function getProgressColor(used: number, limit: number): string {
     const ratio = limit > 0 ? used / limit : 0;
     if (ratio >= 1) return '#DC2626';
@@ -115,6 +127,13 @@
         </div>
         <button onclick={openAdd} class="btn-primary py-2 px-4 text-sm leading-none">+ 设置</button>
       </div>
+
+      {#if availableMonths.some((m) => m < selectedMonth)}
+        <button onclick={copyPrevMonth}
+          class="mb-4 w-full border-2 border-stone-200 text-stone-500 py-2.5 rounded-full text-sm hover:bg-stone-50 hover:border-stone-300 transition">
+          ↻ 复制上月预算到本月
+        </button>
+      {/if}
 
       <!-- 月份选择（可切历史月补设预算 / 看该月消费） -->
       <div class="flex items-center gap-2 mb-4">
