@@ -31,6 +31,14 @@
   let formIsRefund = false;
   let formError = '';
 
+  // 次要筛选项（退款折叠 / 只看支出 / 每页条数）默认收起，主界面只露「分类+搜索」和「日期+清除」两行，
+  // 点开「更多筛选」再展开，减少进页时的滚动量
+  let showMoreFilters = false;
+
+  // 每页条数分页（10/15/20/50），作用在当前展示的扁平记录序列上
+  let pageSize = 10;
+  let page = 1;
+
   onMount(async () => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('startDate')) filterStartDate = params.get('startDate')!;
@@ -61,12 +69,20 @@
     });
   }
 
+  // "全部分类" 的 option value 是字符串 "0"（select 选项全走字符串），
+  // 切到具体分类是 number，切回"全部分类"是字符串 "0"（truthy，会误传 DB）。
+  // 归一：0 / "0" / undefined 都视为"全部"。
+  function normalizedCategoryId(): number | undefined {
+    const v = filterCategoryId;
+    return (v === 0 || v === undefined) ? undefined : (typeof v === 'number' ? v : Number(v) || undefined);
+  }
+
   async function loadExpenses() {
     if (!ledgerId || ledgerId <= 0) return;
     expenses = await getExpenses(ledgerId, {
       startDate: filterStartDate || undefined,
       endDate: filterEndDate || undefined,
-      categoryId: filterCategoryId || undefined
+      categoryId: normalizedCategoryId()
     });
     loading = false;
   }
@@ -106,32 +122,6 @@
     // 退款合计（退款是中性，单独统计用于展示"消费 − 退款"）
     const refund = scope.reduce((s, e) => s + (isRefund(e) ? e.amount_cents : 0), 0);
     return { consume, income, neutral, refund };
-  })();
-
-  // 按月分组 → 月内按天分组。结构：[[month, [ [day, [exp]], ... ]], ...]
-  // 月按倒序（新在前），月内天也倒序
-  $: groupedByMonth = (() => {
-    const byMonth = new Map<string, Expense[]>();
-    for (const e of listExpenses) {
-      const m = e.paid_at.slice(0, 7);
-      const arr = byMonth.get(m) ?? [];
-      arr.push(e);
-      byMonth.set(m, arr);
-    }
-    const monthKeys = Array.from(byMonth.keys()).sort((a, b) => b.localeCompare(a));
-    return monthKeys.map(m => {
-      const monthExpenses = byMonth.get(m)!;
-      const byDay = new Map<string, Expense[]>();
-      for (const e of monthExpenses) {
-        const day = e.paid_at.slice(0, 10);
-        const arr = byDay.get(day) ?? [];
-        arr.push(e);
-        byDay.set(day, arr);
-      }
-      const dayKeys = Array.from(byDay.keys()).sort((a, b) => b.localeCompare(a));
-      const days = dayKeys.map(d => [d, byDay.get(d)!] as [string, Expense[]]);
-      return [m, days] as [string, Array<[string, Expense[]]>];
-    });
   })();
 
   // 月份标签：今年只显示"10月"，非今年显示"2025年10月"
@@ -178,6 +168,61 @@
     searchKeyword = '';
     loadExpenses();
   }
+
+  // 分类是否"生效"（选中了某个真实分类；"全部分类"的 0/"0" 不算）
+  $: hasCategoryFilter = normalizedCategoryId() !== undefined;
+  // 切筛选时重置分页（折叠机制已移除，改由全量分页承载"看历史"诉求）
+
+  // ── 每页 N 条 真分页 ──
+  // 分页基于【全量】记录（listExpenses，倒序新在前），不受月份/天折叠影响，
+  // 这样"全部分类 254 条 / 每页 50"=6 页，折叠只决定某页内的天是否展开、不影响页数。
+  $: flatExpenses = [...listExpenses].sort((a, b) => b.paid_at.localeCompare(a.paid_at));
+  $: totalPages = Math.max(1, Math.ceil(flatExpenses.length / pageSize));
+  // 页码越界（缩小 pageSize / 切筛选后）回退到第 1 页
+  $: if (page > totalPages) page = 1;
+  // 切筛选时一并重置分页
+  $: if (filterStartDate || filterEndDate || hasCategoryFilter || searchKeyword || hideRefunds || showOnlyExpense) {
+    page = 1;
+  }
+  // 本页记录 + 每行的渲染信息（是否本页首条、当月/当天小计）
+  $: pagedRecords = (() => {
+    type Row = {
+      expense: Expense;
+      isMonthHead: boolean;   // 本页里某月份的第一条 → 渲染月份头（未折叠时）
+      monthTotal: number | null;
+      isDayHead: boolean;     // 本页里某天的第一条 → 渲染天头
+      dayTotal: number | null;
+    };
+    const slice = flatExpenses.slice((page - 1) * pageSize, page * pageSize);
+    if (slice.length === 0) return [] as Row[];
+    // 本页记录所属的月份/天集合 + 全量小计（小计=该月/该天在【全量】里的消费净额，不受分页影响）
+    const dayTotals = new Map<string, number>();
+    const monthTotals = new Map<string, number>();
+    for (const e of listExpenses) {
+      const m = e.paid_at.slice(0, 7);
+      const d = e.paid_at.slice(0, 10);
+      const v = isConsumptionScope(e) ? expenseSigned(e) : 0;
+      dayTotals.set(d, (dayTotals.get(d) ?? 0) + v);
+      monthTotals.set(m, (monthTotals.get(m) ?? 0) + v);
+    }
+    const seenMonth = new Set<string>();
+    const seenDay = new Set<string>();
+    return slice.map(e => {
+      const m = e.paid_at.slice(0, 7);
+      const d = e.paid_at.slice(0, 10);
+      const isMonthHead = !seenMonth.has(m);
+      const isDayHead = !seenDay.has(d);
+      if (isMonthHead) seenMonth.add(m);
+      if (isDayHead) seenDay.add(d);
+      return {
+        expense: e,
+        isMonthHead,
+        monthTotal: isMonthHead ? (monthTotals.get(m) ?? 0) : null,
+        isDayHead,
+        dayTotal: isDayHead ? (dayTotals.get(d) ?? 0) : null
+      };
+    });
+  })();
 
   // 格式化日期标签：今天/昨天/具体日期
   function dayLabel(day: string): string {
@@ -278,20 +323,19 @@
   function getCatInfo(id: number) {
     return categories.find(c => c.id === id) ?? { icon: '📝', color: '#6b7280', name: '其他' };
   }
+
+  // 记录所属的月份/天键（用于扁平列表里判断是否渲染月份头/天头）
+  function currentMonthOf(row: { expense: Expense }): string { return row.expense.paid_at.slice(0, 7); }
+  function currentDayOf(row: { expense: Expense }): string { return row.expense.paid_at.slice(0, 10); }
 </script>
 
 <div class="min-h-screen bg-paper">
   <main class="px-4 py-4 max-w-md mx-auto space-y-3 pb-24">
 
-    <!-- 筛选栏 -->
+    <!-- 筛选栏（紧凑：默认只露 分类+搜索 / 日期+清除，次要项收进「更多筛选」） -->
     <div class="bg-white rounded-2xl shadow-card p-4">
-      <div class="flex gap-2 mb-3">
-        <input type="date" bind:value={filterStartDate}
-          onchange={applyFilters} class="input-field text-sm py-2 flex-1" aria-label="开始日期" />
-        <input type="date" bind:value={filterEndDate}
-          onchange={applyFilters} class="input-field text-sm py-2 flex-1" aria-label="结束日期" />
-      </div>
-      <div class="flex gap-2 mb-3">
+      <!-- 行 1：分类 + 搜索 -->
+      <div class="flex gap-2">
         <select bind:value={filterCategoryId} onchange={applyFilters}
           class="input-field text-sm py-2 flex-1 select-arrow">
           <option value="0">全部分类</option>
@@ -299,25 +343,54 @@
             <option value={cat.id}>{cat.icon} {cat.name}</option>
           {/each}
         </select>
-        <button onclick={clearFilters} class="border-2 border-stone-200 text-stone-500 font-medium rounded-full py-2 px-3 text-sm hover:bg-stone-50 transition shrink-0">清除</button>
+        <input type="text" bind:value={searchKeyword} placeholder="搜索商户 / 备注"
+          class="input-field text-sm py-2 flex-1" aria-label="搜索关键词" />
       </div>
-      <input type="text" bind:value={searchKeyword} placeholder="搜索商户 / 备注"
-        class="input-field text-sm py-2 w-full" aria-label="搜索关键词" />
-      <!-- 退款折叠开关 -->
-      <label class="flex items-center gap-2.5 mt-2.5 cursor-pointer select-none">
-        <input type="checkbox" bind:checked={hideRefunds}
-          class="w-4 h-4 rounded border-stone-300 text-clay-600 focus:ring-clay-500" />
-        <span class="text-xs text-stone-500 font-medium">隐藏退款</span>
-        {#if refundCount > 0}
-          <span class="text-[11px] text-stone-400 ml-auto">共 {refundCount} 笔退款</span>
-        {/if}
-      </label>
-      <!-- 只看支出（隐藏收入/中性转账还款理财） -->
-      <label class="flex items-center gap-2.5 mt-1.5 cursor-pointer select-none">
-        <input type="checkbox" bind:checked={showOnlyExpense}
-          class="w-4 h-4 rounded border-stone-300 text-clay-600 focus:ring-clay-500" />
-        <span class="text-xs text-stone-500 font-medium">只看消费支出</span>
-      </label>
+      <!-- 行 2：日期区间 + 清除 -->
+      <div class="flex gap-2 mt-2">
+        <input type="date" bind:value={filterStartDate}
+          onchange={applyFilters} class="input-field text-sm py-2 flex-1 min-w-0" aria-label="开始日期" />
+        <input type="date" bind:value={filterEndDate}
+          onchange={applyFilters} class="input-field text-sm py-2 flex-1 min-w-0" aria-label="结束日期" />
+        <button onclick={clearFilters} class="border-2 border-stone-200 text-stone-500 font-medium rounded-lg py-2 px-3 text-sm hover:bg-stone-50 transition shrink-0">清除</button>
+      </div>
+
+      <!-- 次要项：默认收起 -->
+      <button type="button" onclick={() => showMoreFilters = !showMoreFilters}
+        class="mt-2.5 w-full flex items-center justify-center gap-1 text-xs text-stone-400 hover:text-ink transition">
+        {showMoreFilters ? '收起更多筛选' : '更多筛选'}
+        <span class="transition-transform {showMoreFilters ? 'rotate-180' : ''}" aria-hidden="true">⌄</span>
+      </button>
+      {#if showMoreFilters}
+        <div class="mt-2.5 space-y-2">
+          <!-- 退款折叠开关 -->
+          <label class="flex items-center gap-2.5 cursor-pointer select-none">
+            <input type="checkbox" bind:checked={hideRefunds}
+              class="w-4 h-4 rounded border-stone-300 text-clay-600 focus:ring-clay-500" />
+            <span class="text-xs text-stone-500 font-medium">隐藏退款</span>
+            {#if refundCount > 0}
+              <span class="text-[11px] text-stone-400 ml-auto">共 {refundCount} 笔退款</span>
+            {/if}
+          </label>
+          <!-- 只看支出 -->
+          <label class="flex items-center gap-2.5 cursor-pointer select-none">
+            <input type="checkbox" bind:checked={showOnlyExpense}
+              class="w-4 h-4 rounded border-stone-300 text-clay-600 focus:ring-clay-500" />
+            <span class="text-xs text-stone-500 font-medium">只看消费支出</span>
+          </label>
+          <!-- 每页条数 -->
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-stone-400 shrink-0">每页</span>
+            <select bind:value={pageSize} onchange={() => { page = 1; }}
+              class="input-field text-xs py-1.5 w-24 select-arrow">
+              <option value="10">10 条</option>
+              <option value="15">15 条</option>
+              <option value="20">20 条</option>
+              <option value="50">50 条</option>
+            </select>
+          </div>
+        </div>
+      {/if}
     </div>
 
     <!-- 三分汇总（跟随关键词过滤 + 退款折叠 + 只看支出） -->
@@ -410,83 +483,108 @@
           </p>
         </div>
       {:else}
-        {#each groupedByMonth as [month, days] (month)}
-          <div>
-            <!-- 月份分组头 + 当月合计 -->
-            <div class="flex items-center justify-between px-1 pt-3 pb-1.5 sticky top-0 bg-paper z-20">
-              <div class="flex items-center gap-2">
-                <span class="text-sm font-bold text-ink">{monthLabel(month)}</span>
-                <span class="text-[10px] text-stone-300">
-                  {days.reduce((s, [, de]) => s + de.length, 0)} 笔
-                </span>
-              </div>
-              <span class="font-mono text-sm font-semibold"
-                style="font-family:'JetBrains Mono',monospace;color:#B45309;">
-                {centsToYuan(days.reduce((s, [, de]) => s + de.reduce((ss, e) => ss + (isConsumptionScope(e) ? expenseSigned(e) : 0), 0), 0))}
-              </span>
-            </div>
-
-            <!-- 该月下的各天 -->
-            {#each days as [day, dayExpenses] (month + day)}
-              <!-- 日期分组头 + 当日小计 -->
-              <div class="flex items-center justify-between px-1 py-1.5 sticky top-8 bg-paper z-10">
-                <span class="text-xs font-semibold text-stone-500">{dayLabel(day)}</span>
-                <span class="font-mono text-xs"
-                  style="font-family:'JetBrains Mono',monospace;color:#78716C;">
-                  {centsToYuan(dayExpenses.reduce((s, e) => s + (isConsumptionScope(e) ? expenseSigned(e) : 0), 0))}
-                </span>
-              </div>
-              <div class="bg-white rounded-2xl shadow-soft overflow-hidden divide-y divide-stone-100">
-                {#each dayExpenses as expense (expense.id)}
+        <!-- 全量计数（从筛选区移到列表上方，不挤占主界面） -->
+        <div class="text-[11px] text-stone-400 px-1" style="font-family:'JetBrains Mono',monospace;">
+          全部 {listExpenses.length} 条 · 本页 {Math.min(pageSize, Math.max(0, flatExpenses.length - (page - 1) * pageSize))} / 共 {totalPages} 页
+        </div>
+        <!-- 扁平记录分页列表：月份/天分组头只在首条渲染，按 pageSize 切片 -->
+        {#if pagedRecords.length === 0}
+          <div class="text-center py-8 bg-white rounded-2xl shadow-soft text-sm text-stone-400">本页无记录</div>
+        {:else}
+          <div class="space-y-2">
+            {#each pagedRecords as row (row.expense.id)}
+              <!-- 月份分组头（该月首条记录）：静态标题 -->
+              {#if row.isMonthHead}
+                {@const m = currentMonthOf(row)}
+                <div class="w-full flex items-center justify-between px-1 pt-2 pb-1">
+                  <div class="flex items-center gap-2">
+                    <span class="text-sm font-bold text-ink">{monthLabel(m)}</span>
+                  </div>
+                  {#if row.monthTotal !== null}
+                    <span class="font-mono text-sm font-semibold"
+                      style="font-family:'JetBrains Mono',monospace;color:#B45309;">
+                      {centsToYuan(row.monthTotal)}
+                    </span>
+                  {/if}
+                </div>
+              {/if}
+              <!-- 天分组头（该天首条记录）+ 当日小计 -->
+              {#if row.isDayHead}
+                <div class="flex items-center justify-between px-1 py-1">
+                  <span class="text-xs font-semibold text-stone-500">{dayLabel(currentDayOf(row))}</span>
+                  <span class="font-mono text-xs"
+                    style="font-family:'JetBrains Mono',monospace;color:#78716C;">
+                    {centsToYuan(row.dayTotal ?? 0)}
+                  </span>
+                </div>
+              {/if}
+              <!-- 单条记录 -->
+                <div class="bg-white rounded-2xl shadow-soft overflow-hidden divide-y divide-stone-100">
                   <div class="p-3.5 flex items-center gap-3 active:bg-stone-50 transition-colors"
-                    class:list={[isNeutral(expense) ? 'opacity-55' : '']}>
+                    class:list={[isNeutral(row.expense) ? 'opacity-55' : '']}>
                     <div class="w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0"
-                      style="background-color: {getCatInfo(expense.category_id).color}18; color: {getCatInfo(expense.category_id).color};">
-                      {getCatInfo(expense.category_id).icon}
+                      style="background-color: {getCatInfo(row.expense.category_id).color}18; color: {getCatInfo(row.expense.category_id).color};">
+                      {getCatInfo(row.expense.category_id).icon}
                     </div>
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-2">
-                        <span class="font-medium text-ink text-sm">{getCatInfo(expense.category_id).name}</span>
-                        {#if isIncome(expense)}
+                        <span class="font-medium text-ink text-sm">{getCatInfo(row.expense.category_id).name}</span>
+                        {#if isIncome(row.expense)}
                           <span class="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">收入</span>
-                        {:else if isRefund(expense)}
+                        {:else if isRefund(row.expense)}
                           <span class="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium">退款</span>
-                        {:else if subTypeLabel(expense)}
-                          <span class="text-[10px] bg-stone-100 text-stone-500 px-1.5 py-0.5 rounded-full font-medium">{subTypeLabel(expense)}</span>
+                        {:else if subTypeLabel(row.expense)}
+                          <span class="text-[10px] bg-stone-100 text-stone-500 px-1.5 py-0.5 rounded-full font-medium">{subTypeLabel(row.expense)}</span>
                         {/if}
                       </div>
                       <div class="text-xs text-stone-400 truncate mt-0.5">
-                        {#if expense.merchant && expense.remark}
-                          {expense.merchant} · {expense.remark}
+                        {#if row.expense.merchant && row.expense.remark}
+                          {row.expense.merchant} · {row.expense.remark}
                         {:else}
-                          {(expense.merchant ?? expense.remark ?? '—')}
+                          {(row.expense.merchant ?? row.expense.remark ?? '—')}
                         {/if}
-                        <span class="text-stone-300"> · {expense.paid_at.slice(11, 16)}</span>
+                        <span class="text-stone-300"> · {row.expense.paid_at.slice(11, 16)}</span>
                       </div>
                     </div>
                     <div class="text-right shrink-0">
                       <div class="font-mono font-semibold text-sm"
-                        style={isIncome(expense)
+                        style={isIncome(row.expense)
                           ? 'color:#16A34A;font-family:"JetBrains Mono",monospace;'
-                          : (isRefund(expense) ? 'color:#D97706;font-family:"JetBrains Mono",monospace;'
-                          : (isNeutral(expense) ? 'color:#A8A29E;font-family:"JetBrains Mono",monospace;' : 'color:#1C1917;font-family:"JetBrains Mono",monospace;'))}>
-                        {isIncome(expense) ? '+' : (isRefund(expense) ? '−' : (isNeutral(expense) ? '·' : '−'))}¥{centsToYuan(expense.amount_cents)}
+                          : (isRefund(row.expense) ? 'color:#D97706;font-family:"JetBrains Mono",monospace;'
+                          : (isNeutral(row.expense) ? 'color:#A8A29E;font-family:"JetBrains Mono",monospace;' : 'color:#1C1917;font-family:"JetBrains Mono",monospace;'))}>
+                        {isIncome(row.expense) ? '+' : (isRefund(row.expense) ? '−' : (isNeutral(row.expense) ? '·' : '−'))}¥{centsToYuan(row.expense.amount_cents)}
                       </div>
                       <div class="flex gap-1 mt-1.5 justify-end">
-                        <button type="button" onclick={() => openEdit(expense)} aria-label="编辑" class="p-1.5 text-stone-400 hover:text-clay-600 transition-colors rounded-lg hover:bg-clay-50">
+                        <button type="button" onclick={() => openEdit(row.expense)} aria-label="编辑" class="p-1.5 text-stone-400 hover:text-clay-600 transition-colors rounded-lg hover:bg-clay-50">
                           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
                         </button>
-                        <button type="button" onclick={() => handleDelete(expense.id)} aria-label="删除" class="p-1.5 text-stone-400 hover:text-red-500 transition-colors rounded-lg hover:bg-red-50">
+                        <button type="button" onclick={() => handleDelete(row.expense.id)} aria-label="删除" class="p-1.5 text-stone-400 hover:text-red-500 transition-colors rounded-lg hover:bg-red-50">
                           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
                         </button>
                       </div>
                     </div>
                   </div>
-                {/each}
-              </div>
+                </div>
             {/each}
           </div>
-        {/each}
+
+          <!-- 分页控件 -->
+          <div class="flex items-center justify-between py-3">
+            <button type="button" disabled={page <= 1}
+              onclick={() => { if (page > 1) { page--; window.scrollTo({ top: 0, behavior: 'smooth' }); } }}
+              class="px-4 py-2 rounded-full text-sm font-medium transition
+                {page <= 1 ? 'bg-stone-100 text-stone-300 cursor-not-allowed' : 'bg-white text-clay-600 shadow-soft hover:bg-stone-50'}">
+              上页
+            </button>
+            <span class="text-xs text-stone-500" style="font-family:'JetBrains Mono',monospace;">{page} / {totalPages}</span>
+            <button type="button" disabled={page >= totalPages}
+              onclick={() => { if (page < totalPages) { page++; window.scrollTo({ top: 0, behavior: 'smooth' }); } }}
+              class="px-4 py-2 rounded-full text-sm font-medium transition
+                {page >= totalPages ? 'bg-stone-100 text-stone-300 cursor-not-allowed' : 'bg-white text-clay-600 shadow-soft hover:bg-stone-50'}">
+              下页
+            </button>
+          </div>
+        {/if}
       {/if}
     {/if}
   </main>

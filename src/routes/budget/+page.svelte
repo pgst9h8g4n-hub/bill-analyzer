@@ -1,10 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import {
-    getBudgets,
-    getCurrentMonthSpending,
-    saveBudget
-  } from '$lib/db/budget';
+  import { getBudgets, getCurrentMonthSpending, saveBudget, getCategorySpending } from '$lib/db/budget';
   import { getCategories } from '$lib/db';
   import { centsToYuan, getCurrentMonth } from '$lib/utils/format';
   import type { Budget, Category } from '$lib/db';
@@ -16,6 +12,8 @@
   let budgets: Budget[] = [];
   let categories: Category[] = [];
   let spending = 0;
+  // 各分类本月实际消费净额，用于分类预算进度条（总支出 spending 仅用于总预算卡）
+  let catSpending = new Map<number, number>();
 
   let showAddForm = false;
   let addLimit = '';
@@ -29,7 +27,14 @@
       getCurrentMonthSpending(ledgerId, currentMonth)
     ]);
     if (categories.length > 0) addCategoryId = categories[0].id;
+    await refreshCatSpending();
   });
+
+  async function refreshCatSpending() {
+    const ids = [...new Set(budgets.filter(b => b.category_id != null).map(b => b.category_id!))];
+    const results = await Promise.all(ids.map(id => getCategorySpending(ledgerId, currentMonth, id)));
+    catSpending = new Map(ids.map((id, i) => [id, results[i]]));
+  }
 
   function openAdd() {
     showAddForm = true;
@@ -46,6 +51,7 @@
     });
     budgets = await getBudgets(ledgerId, currentMonth);
     spending = await getCurrentMonthSpending(ledgerId, currentMonth);
+    await refreshCatSpending();
     showAddForm = false;
   }
 
@@ -123,11 +129,13 @@
                     </div>
                     <span class="text-sm font-medium text-ink">{categories.find(c => c.id === budget.category_id)?.name ?? '其他'}</span>
                   </div>
-                  <span class="text-sm font-mono text-stone-500" style="font-family:'JetBrains Mono',monospace;">¥{centsToYuan(budget.limit_cents)}</span>
+                  <span class="text-sm font-mono text-stone-500" style="font-family:'JetBrains Mono',monospace;">
+                    ¥{centsToYuan(catSpending.get(budget.category_id) ?? 0)} / ¥{centsToYuan(budget.limit_cents)}
+                  </span>
                 </div>
                 <div class="h-1.5 bg-stone-100 rounded-full overflow-hidden">
                   <div class="h-full rounded-full transition-all duration-500"
-                    style="width: {Math.min(Math.round(spending / (budget.limit_cents || 1) * 100), 100)}%; background-color: {getProgressColor(spending, budget.limit_cents)}"></div>
+                    style="width: {Math.min(Math.round((catSpending.get(budget.category_id) ?? 0) / (budget.limit_cents || 1) * 100), 100)}%; background-color: {getProgressColor(catSpending.get(budget.category_id) ?? 0, budget.limit_cents)}"></div>
                 </div>
               </div>
             {/if}

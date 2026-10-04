@@ -17,7 +17,22 @@ export async function getCurrentMonthSpending(ledgerId: number, month: string): 
       .where('ledger_id').equals(ledgerId)
       .and((e) => e.paid_at.startsWith(prefix))
       .toArray();
-    return expenses.reduce((s, e) => s + (isConsumptionScope(e) ? expenseSigned(e) : 0), 0);
+    // 消费净额 expenseSigned 记负，预算进度算"已花"正值，取绝对值
+    return expenses.reduce((s, e) => s + (isConsumptionScope(e) ? Math.abs(expenseSigned(e)) : 0), 0);
+  } catch {
+    return 0;
+  }
+}
+
+// 某分类在指定月份的实际消费净额（cent）。categoryId 为 null/undefined 时等于全月消费净额。
+export async function getCategorySpending(ledgerId: number, month: string, categoryId: number | null): Promise<number> {
+  try {
+    const prefix = month + '-';
+    const expenses = await db.expenses
+      .where('ledger_id').equals(ledgerId)
+      .and((e) => e.paid_at.startsWith(prefix) && (categoryId == null || e.category_id === categoryId))
+      .toArray();
+    return expenses.reduce((s, e) => s + (isConsumptionScope(e) ? Math.abs(expenseSigned(e)) : 0), 0);
   } catch {
     return 0;
   }
